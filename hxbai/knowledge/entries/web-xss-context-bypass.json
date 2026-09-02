@@ -1,0 +1,78 @@
+{
+  "id": "web-xss-context-bypass",
+  "title": "XSS 上下文绕过速查(过滤器黑名单/属性注入/URL 白名单/编码叠加,靶机自渲染判分)",
+  "vuln_pattern": "用户输入被回显进 HTML 且有一层或多层过滤(关键词黑名单、事件属性黑名单、URL 协议白名单、大小写/编码变换),需构造在'该上下文'里能执行 JS 的 payload;典型判分:靶机 headless(PhantomJS/无头浏览器)加载回显页,alert('XSS') 弹出即在响应里回 flag",
+  "fingerprint": [
+    "xss",
+    "XSS",
+    "跨站脚本",
+    "alert(",
+    "onerror",
+    "onload",
+    "javascript:",
+    "过滤器绕过",
+    "htmlsanitizer",
+    "反射",
+    "cross-site",
+    "跨站",
+    "payload弹窗",
+    "sanitizer bypass",
+    "autofocus",
+    "onfocus",
+    "phantomjs",
+    "headless bot",
+    "checker bot",
+    "事件合成",
+    "jsfuck",
+    "字符集限制",
+    "无字母数字",
+    "js字符串逃逸"
+  ],
+  "exploit_steps": [
+    "先确定回显【上下文】再写 payload:①裸 HTML 体 ②标签属性内(value=\"...\") ③<script> 字符串内 ④事件处理器内 ⑤注释/CDATA 内。上下文决定逃逸所需的第一步(闭引号/闭标签/注释符),不问上下文直接丢 <script> 是最大浪费。",
+    "关键词黑名单绕过按序试:大小写混合 <ScRiPt>/<ImG、双写绕过(scrscriptipt 删一次后还原)、拆分表达式(window['al'+'ert'] 拼接调用)、事件属性轮换(onerror/onload/onfocus+autofocus/onanimationstart/onpointerover、<svg><animate onbegin=)、标签轮换(img/body/svg/details/iframe/object/video/audio/marquee)。",
+    "属性内上下文:先闭引号(+空格)逃出属性再注入事件;< 和 > 被过滤时用事件属性表达式(alert 由 onxxx= 触发不需要新标签);引号被转义时看能否不闭(事件值用无引号写法 onfocus=alert(1) autofocus)。",
+    "URL 协议白名单(http/https):试 javascript: 的变形—— java\tscript:、jav\tascript:、data:text/html;base64、//协议相对 + 自己页面内二次跳转;URL 上下文里 href=\"javascript:...\"、src=\"javascript:...\" 的弹窗不需要 <>。",
+    "编码叠加:HTML 实体(&#x61;&#x6c;...)、URL 编码、Unicode 转义(\\u0061lert)、JS 模板串;先弄清解码顺序(HTML 实体 -> JS 层),payload 在'上一层解码后恰好是下一层语法'为准。",
+    "交互环境判分:很多 XSS 靶标由服务端 headless 浏览器 加载你的页面,检测 alert('XSS') 含大写 XSS 即回 flag——payload 里弹窗字符串的大小写/内容要严格按题目判定要求写,并确认 alert 是全局调用而非被 shadow。",
+    "现成 payload 语料在镜像内:grep -i xss /opt/kb/INDEX.txt -> PayloadsAllTheThings/XSS Injection/(含过滤器绕过大表),命中黑名单单词先查表再自造。",
+    "服务端判定机器人(headless 检查器)的事件合成:许多 checker 加载页面后会主动给 [autofocus]/[onfocus] 元素派发 focus 事件、给可点元素派发 click——即使没有真人交互,含 autofocus 属性的 payload 也会触发。构造时默认带 autofocus。",
+    "白名单只放行单个标签时(如只允许 <image>):用该标签自身的事件属性(image 的 onerror/onfocus)+autofocus,不要试图引入别的标签;image 标签配 onerror=alert(1) 是无 src 失败即触发的最小形状。",
+    "输出点会【删除所有空白字符】时:payload 不能含任何空格——用属性间的斜杠分隔(<image/src=x/onerror=...>)、用水平制表符不可行(也被 \\s 删)时全部免空格书写。",
+    "极端字符集限制(黑名单封了全部字母数字,甚至连 <> 都封):注入不了任何标签/关键字。先认清上下文——多半落在 var x=\"...\" 的 JS 字符串里,用 \"+...+\" 闭合并拼接;可用字符只剩 []()!+ 时用 JSFuck 编码。JSFuck 必须是【自执行(eval-wrapped)】版本,否则只求值成字符串、代码不运行;编码结果仅含 []()!+,天然过'禁字母数字'过滤。判分要精确字符串时把该字面量(如大写 XSS)编进 alert。"
+  ],
+  "key_payloads": [
+    "# 上下文速查(按回显位置)\n# ①HTML体: <script>alert('XSS')</script> / <img src=x onerror=alert('XSS')>\n# ②属性内: \" onfocus=alert('XSS') autofocus x=\" / ' onerror=alert('XSS') src=x\n# ③<script>串内: ';alert('XSS');//   或闭合标签 </script><img src=x onerror=alert('XSS')>\n# ④URL/href: javascript:alert('XSS')  (大小写变形 JaVaScRiPt:)",
+    "# 黑名单轮换表\n# script被禁: <svg onload=alert('XSS')> <body onpageshow=alert('XSS')> <details open ontoggle=alert('XSS')>\n# alert被禁: window['al'+'ert']('XSS') / confirm('XSS') / prompt('XSS')  (先确认判分只认alert)\n# 括号被禁: alert`XSS` (反引号模板串)\n# 空格被禁: <img/src=x/onerror=alert('XSS')> (斜杠代空格)",
+    "<image src=x onerror=alert(1) autofocus>",
+    "<image/src=x/onerror=alert(1)>"
+  ],
+  "category": "web",
+  "cve": [],
+  "tags": [
+    "xss",
+    "filter-bypass",
+    "context-escape",
+    "event-handler",
+    "url-whitelist",
+    "encoding-bypass",
+    "headless-oracle"
+  ],
+  "source": "seed: web security technique methodology",
+  "source_tier": "seed",
+  "preconditions": [
+    "输入回显进 HTML 且存在过滤(黑名单/白名单/编码)",
+    "判分 oracle 可观察:headless 渲染后响应回 flag、或管理员 bot 行为/OOB 回调"
+  ],
+  "verify_oracle": "靶机响应直接返回 flag(判分型),或 payload 触发的请求到达你控制的 OOB/日志端点",
+  "pitfalls": [
+    "不先看回显位置就盲发 <script>——属性/JS 串上下文里它只是文本",
+    "判分型靶场对弹窗内容有精确要求(alert('XSS') 大写 XSS)——大小写不符等于没触发",
+    "黑名单是'删一次'型时用双写;是'拒绝请求'型时双写无效,换同义结构",
+    "多层过滤叠加时从最外层逐层剥:每过一层用最小探针确认(先 alert(1) 简单形,过筛后再改成判分要求的字符串)",
+    "字母数字全禁时别在标签/关键字上耗——那条路被物理封死,唯一出路是 JSFuck(纯 []()!+)配合闭合当前 JS 字符串上下文;且必须用自执行版 JSFuck,普通 encode 只得到字符串不触发"
+  ],
+  "anti_fingerprint": [],
+  "created_ts": 0.0,
+  "notes": "先判定检查器用什么事件收割(onAlert/console 钩子),payload 的 alert 字符串必须与要求逐字符一致。"
+}

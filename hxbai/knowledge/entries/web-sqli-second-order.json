@@ -1,0 +1,42 @@
+{
+  "id": "web-sqli-second-order",
+  "title": "二阶 SQL 注入:第一条查询的返回值被拼进第二条查询 + '密码不可爆破就伪造查询结果'",
+  "vuln_pattern": "应用先查一次(输入点A),把查询【返回的字符串】(不是原始输入)再拼进第二条 SQL——只要用 UNION 控制第一条查询返回的字符串,就控制了第二条查询的注入。常配合'密码为多层哈希(MD5(CONCAT(MD5(pw),MD5(user))) 之类)不可爆破'的登录场景:不要爆破,伪造让第二条查询恒返回一行的结果",
+  "fingerprint": [
+    "second order",
+    "二阶注入",
+    "second-order",
+    "stored sql injection",
+    "二次注入",
+    "UNION SELECT 1#",
+    "union 返回值再拼接",
+    "MD5(CONCAT(MD5",
+    "密码不可爆破",
+    "password hash concat",
+    "登录绕过 union",
+    "登录逻辑伪造"
+  ],
+  "anti_fingerprint": [
+    "xss",
+    "跨站",
+    "deserialization",
+    "反序列化"
+  ],
+  "category": "web",
+  "source": "seed",
+  "exploit_steps": [
+    "识别形状:源码里找'查询->取返回字段->拼进下一条查询'的数据流(登录两段查询最常见:第一段验用户存在,返回 username;第二段用返回的 username 验密码)。黑盒侧特征:注入点似乎'无害'(第一条查询参数化/过滤严),但返回内容会影响后续行为。",
+    "控制返回值:第一条查询若可 UNION(或可堆叠),让它的返回行携带你构造的字符串 S。S 里带 # 注释截断,把第二条查询变成恒真/恒一行。",
+    "登录场景:目标=第二条查询 num_rows==1。构造 S = ' UNION SELECT 1# 之类,代入后第二条变成 WHERE username='' UNION SELECT 1#... LIMIT 1 -> 恒一行 -> 登录成功,无需知道密码。",
+    "密码多层哈希的应对:M D5(CONCAT(MD5(pw),MD5(user))) 这类盐化构造【永不爆破】——哈希只是比较函数,绕过它靠的是让查询返回你需要的行,不是算出原像。同理:明文严格比较(password===row.password)的登录,先走'把密码 UNION 出来'的 in-band 路线(见回显列),拿不到回显再走盲注逐字节。",
+    "通用化:凡'值先入库/先查出、再被拼接'的链路(注册名->个人页查询、昵称->导出查询)都是同一形状;注入点在【写入处】,执行点在【读取处】,测试时先写后读。"
+  ],
+  "key_payloads": [
+    "# 第一条查询注入点(用户名框): 让返回值成为二阶载荷\n' UNION SELECT 1#\n' UNION SELECT CHAR(39,85,78,73,79,78)#   -- 引号被转义时用 CHAR() 拼二阶载荷",
+    "# 二阶生效后的第二条查询形态(登录恒一行):\nSELECT user_id FROM users WHERE username='' UNION SELECT 1#' AND password=MD5(...) LIMIT 1"
+  ],
+  "refs": [
+    "PortSwigger SQL injection cheat sheet (second-order)"
+  ],
+  "notes": "第一条查询 UNION 的列数/类型要对齐(app 只取第一列时要保证载荷落在被取的那列)。注释符优先 #,-- 需要尾随空格易被过滤。"
+}

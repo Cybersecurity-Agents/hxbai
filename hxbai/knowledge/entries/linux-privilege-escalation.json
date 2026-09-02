@@ -1,0 +1,57 @@
+{
+  "id": "linux-privilege-escalation",
+  "title": "Linux 提权方法论",
+  "vuln_pattern": "privesc-linux",
+  "fingerprint": [
+    "shell",
+    "www-data",
+    "suid",
+    "suid python",
+    "setuid",
+    "root-only",
+    "gtfobins",
+    "sudo",
+    "cron",
+    "capabilities",
+    "kernel",
+    "docker.sock",
+    "路径穿越",
+    "提权",
+    "权限提升",
+    "本地提权",
+    "立足点",
+    "渗透",
+    "内网",
+    "横向"
+  ],
+  "exploit_steps": [
+    "自动枚举:linpeas/pspy",
+    "检查:sudo -l、SUID(find / -perm -4000)、capabilities、可写 cron/service、PATH 劫持",
+    "SUID 解释器/工具 = 直接提权(GTFOBins 式,高频):find -perm -4000 里出现 python/perl/ruby/node/php/env/awk/nmap/vim/find/tar 等能执行代码的 SUID 程序时,按 GTFOBins 对应条目用它 setuid(0) 后执行命令或起 shell 读 root-only 文件。别只认经典 SUID 二进制,凡能执行代码的 SUID 程序几乎都能提。",
+    "内核漏洞(uname -a->exploit)",
+    "容器逃逸:/var/run/docker.sock、特权容器、cgroup release_agent",
+    "GTFOBins 利用允许的二进制",
+    "多-flag/链式题拿到 RCE 后立刻找 root-only 目标:某个 flag 常是 root 才能读(chmod 600 owner root)。先看当前权限,不是 root 就把提权当必经步骤,连同 SUID 枚举一起做,root-only 文件与 SUID 提权点往往成对出现。"
+  ],
+  "key_payloads": [
+    "sudo -l",
+    "find / -perm -4000 -type f 2>/dev/null",
+    "getcap -r / 2>/dev/null",
+    "cat /etc/crontab"
+  ],
+  "category": "pentest",
+  "cve": [],
+  "tags": [
+    "privesc",
+    "post-exploitation"
+  ],
+  "source": "seed: pentest methodology",
+  "created_ts": 0.0,
+  "preconditions": [],
+  "verify_oracle": "提权后 `id` 显示 uid=0(或目标属主),且能读此前 Permission denied 的 root-only 文件——以真实读到内容为证,不是'脚本没报错'",
+  "pitfalls": [
+    "枚举输出被截断=没看全,别下结论:find -perm -4000 的输出被前一条命令的噪声(如 ping 回显/sed 处理)截断,只看到 mount/su/umount 就误判'无可利用 SUID',漏掉 SUID python/perl。单独干净地跑一次枚举,`2>/dev/null` 去噪,完整读全表再判断。",
+    "只认经典 SUID 二进制(pkexec/cp)而漏掉 SUID 解释器:凡能执行代码的 SUID 程序(python/perl/ruby/awk/env/node)几乎都能 setuid(0) 提权,先查 GTFOBins 有无对应条目。",
+    "多-flag 题非 root 就收工:某个 flag 常是 root-only,拿到 www-data RCE 只是中途;`id` 非 0 时把提权当必经步骤,别把'读不到那个 flag'当成题目没做全的借口。"
+  ]
+}

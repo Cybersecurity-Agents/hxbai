@@ -1,0 +1,33 @@
+{
+  "id": "web-method-authz-deep-probe",
+  "title": "方法级鉴权绕过的深探:404 页的 405/501 不是证据,打真实入口读全响应体",
+  "vuln_pattern": "鉴权只在部分方法/路径上强制(常见:GET 挡了、POST/HEAD/OPTIONS/PATCH 漏挡;或 404 页对不允许的方法回 405/501)。浅尝者发一个方法变体被 404/405 顶回就断言'不通'——但 404 页面自带的 405/501 只是那一个路径的答案,不是鉴权全局的答案",
+  "fingerprint": [
+    "method-based authz",
+    "方法级鉴权",
+    "http method tampering",
+    "405 Method Not Allowed",
+    "verb tampering",
+    "HEAD bypass",
+    "OPTIONS bypass",
+    "PATCH bypass",
+    "method override",
+    "X-HTTP-Method-Override"
+  ],
+  "anti_fingerprint": ["xss", "跨站", "captcha", "验证码", "smuggling", "走私"],
+  "category": "web",
+  "source": "seed",
+  "exploit_steps": [
+    "方法枚举的正确判据:对【真实存在的入口】(登录后跳转目标、API 端点、POST 目标——不是 404 占位路径)逐方法发请求,每个都【读完整响应体】比对,不是只看状态码。404 页返回的 405/501 只说明'那个路径不接受该方法',对鉴权判定零信息。",
+    "全方法矩阵:GET/POST/PUT/PATCH/DELETE/HEAD/OPTIONS/TRACE 各打真实入口;HEAD 常被框架忽略鉴权中间件;OPTIONS 有时触发路由层泄漏 Allow 头;另试 X-HTTP-Method-Override / X-Method-Override 头把 POST 伪装成受信方法。",
+    "体比对而非码比对:把每个方法的响应体逐段 diff——鉴权绕过的特征是'同一路径不同方法回出不同长度的正文'(挡住的回登录页/错误页,漏挡的回真内容)。状态码相同(都 200/302)但体不同也是命中。",
+    "浅尝计数纪律:方法矩阵没打满(≥6 方法 × 真实入口)之前,不许断言'方法绕过不通'换路——这是'一发 404 就走'的高发错题点。",
+    "命中后的利用:漏挡方法回出的正文直接读;若正文需要 POST 参数,用 X-HTTP-Method-Override 让鉴权层看 GET、路由层执行 POST。"
+  ],
+  "key_payloads": [
+    "for m in GET POST PUT PATCH DELETE HEAD OPTIONS; do echo \"== $m ==\"; curl -s -m 8 -X $m -i http://$TARGET/real/entry | sed -n '1p;/^$/,$p' | head -20; done",
+    "curl -s -i -X POST http://$TARGET/real/entry -H 'X-HTTP-Method-Override: GET' -d 'cmd=id'"
+  ],
+  "refs": ["OWASP: Testing for HTTP Verb Tampering"],
+  "notes": "真实入口的发现优先:302 跳转目标、表单 action、JS 里的 fetch 调用——404 路径上的方法探测全是噪声。"
+}

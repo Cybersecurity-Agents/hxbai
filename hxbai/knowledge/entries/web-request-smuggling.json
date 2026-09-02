@@ -1,0 +1,62 @@
+{
+  "id": "web-request-smuggling",
+  "title": "HTTP 请求走私:链式反代解析差异(TE.TE/CL.TE/TE.CL)打穿 ACL 内部路由",
+  "vuln_pattern": "两层及以上代理链(反代->负载均衡->后端)对 Transfer-Encoding/Content-Length 的判定规则不同——一个按子串匹配认定 chunked、另一个要求精确值,或一个看 TE 一个看 CL。发一个两代理解釋不一致的请求,前代理转发的字节流被后代理切成两个请求,第二个'走私请求'绕过前代理的 Host/ACL 检查直达内部路由",
+  "fingerprint": [
+    "request smuggling",
+    "请求走私",
+    "TE.TE",
+    "CL.TE",
+    "TE.CL",
+    "desync",
+    "http-desync",
+    "transfer-encoding",
+    "chunked",
+    "mitmproxy",
+    "haproxy",
+    "两层代理",
+    "代理链",
+    "reverse mode",
+    "no option http-use-htx",
+    "legacy parser",
+    "http smuggling",
+    "smuggle",
+    "te header",
+    "internal vhost",
+    "vhost acl",
+    "proxy chain difference",
+    "smuggled request",
+    "路径ACL绕过",
+    "proxy path acl bypass",
+    "url fragment acl",
+    "path normalization mismatch",
+    "CVE-2023-45539"
+  ],
+  "anti_fingerprint": [
+    "smtp",
+    "邮件",
+    "内存镜像",
+    "firmware",
+    "固件"
+  ],
+  "category": "web",
+  "source": "seed",
+  "exploit_steps": [
+    "拓扑定性:nmap/响应头判断出几层代理、各自版本(server:、via:)。画出 client->proxyA->proxyB->backend 链,确认 proxyA 是否改写 Host(reverse 模式常把 Host 换成上游——这正是内部 vhost 不可达的原因)。",
+    "找内部路由线索:登录后扫功能页,找服务端自己 curl 上游时带的 Host 头(页面源码/调试输出常泄露 internal 主机名);后端 ACL 通常按 Host 精确匹配分流到内部 vhost。",
+    "构造解析差异:目标是让 proxyA 认为'chunked'而 proxyB 按 CL 处理(或反之)。经典三连:① TE 头值带杂质(如 xchunked)——子串匹配的代理认定 chunked、要求精确值的 legacy 解析器回落 CL;② 双头 TE+CL 各代理取不同头;③ TE 头名变形(X-Transfer-Encoding/大小写/续行)。配 Content-Length: N 只消费前 N 字节,余下字节成为走私请求。",
+    "走私载荷:把真正想发的请求(带内部 Host 头的 GET)作为前一请求 body 的'剩余字节'。前代理按自己的理解转发整个流,后代理切完第一个请求后把剩余当第二个请求解析——它直接面对后端,Host/ACL 都是走私请求自己的。",
+    "读响应:走私请求的响应不会直接回来——它出现在同一连接的'下一个响应'里。客户端再发一个普通请求,读到的就是走私请求的响应(flag/内部页面)。响应错位也是确认走私成功的判据。",
+    "验证与排错:先发无负载探测(剩余字节=垃圾)看连接是否 400/超时/错位;错位=desync 成立。每种变体(①②③)逐一试,代理版本组合决定哪条生效。工具可用 /opt/kb 的 smuggler 类脚本或手写 raw socket(python socket 直连最稳,requests 会重组头)。",
+    "【反代路径 ACL 绕过——代理与后端的路径解释差异(与走私同源:同一请求两层解释不一致)】前置反代(HAProxy/nginx 等)按路径前缀做 allow/deny ACL 时,若代理的归一化/匹配与后端路由不一致,可让【代理 ACL 匹配到一个字符串、后端却路由到另一个】,抵达 ACL 本要拒绝的端点:试 URL fragment `#`(如 HAProxy CVE-2023-45539 的 `#` 截断使 `path_beg` ACL 失配)、百分号编码、末尾字符/斜杠、大小写、`;`参数、双斜杠等归一化差异。拿到被 ACL 保护端点的响应后按常规续打(取令牌/伪造/读 flag)。"
+  ],
+  "key_payloads": [
+    "# TE.TE 子串-vs-精确 差异(raw socket):\nPOST / HTTP/1.1\\r\\nHost: TARGET\\r\\nTransfer-Encoding: xchunked\\r\\nContent-Length: 4\\r\\n\\r\\nZZ\\r\\nGET /internal-path HTTP/1.1\\r\\nHost: internal.vhost\\r\\n\\r\\n",
+    "# 双头变体:\nPOST / HTTP/1.1\\r\\nHost: TARGET\\r\\nContent-Length: 6\\r\\nTransfer-Encoding: chunked\\r\\n\\r\\n0\\r\\n\\r\\nGET /admin HTTP/1.1\\r\\nHost: internal\\r\\nX: ",
+    "# 确认错位:走私后再发 GET /index.html,若返回内容属于走私请求 -> desync 成功"
+  ],
+  "refs": [
+    "/opt/kb/PayloadsAllTheThings (Request Smuggling 分区)"
+  ],
+  "notes": "响应出现在下一个请求的响应里——不要因为'第一个响应正常'就断定失败。raw socket 直连,禁用客户端的头重组。"
+}

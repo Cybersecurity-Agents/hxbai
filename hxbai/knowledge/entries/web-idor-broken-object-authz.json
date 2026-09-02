@@ -1,0 +1,57 @@
+{
+  "id": "web-idor-broken-object-authz",
+  "title": "IDOR / 对象级越权 — 可篡改的身份/对象标识访问他人资源",
+  "vuln_pattern": "服务端用请求里可控的对象或身份标识(路径/查询/隐藏表单字段/cookie/JWT 声明里的 id)去取资源,却不校验该标识是否属于当前认证主体;或'认证'与'取哪条数据'用了两个解耦的字段",
+  "fingerprint": [
+    "idor",
+    "越权",
+    "水平越权",
+    "垂直越权",
+    "broken object level",
+    "object id",
+    "user_id",
+    "account_id",
+    "order_id",
+    "/user/",
+    "/api/",
+    "?id=",
+    "uuid",
+    "遍历id",
+    "hidden field",
+    "对象引用",
+    "身份标识"
+  ],
+  "exploit_steps": [
+    "找对象标识:URL 路径/查询(?id=、/order/123)、隐藏表单字段、cookie、JWT payload、POST body 里任何'看着像 ID'的值(自增数字/uuid/短哈希)。",
+    "换值访问:把标识换成邻近值或他人的值,看是否返回不属于你的数据。数字 id 按观察到的量级扫邻域(如看到某个多位 id 就扫它所在的同前缀整段,而非只 ±1);uuid/哈希看是否可预测或可枚举来源。",
+    "认证≠授权的解耦点(高发):登录用一组字段校验,却用另一个可控字段(隐藏 user_id / X-User header / cookie 里的 role / 会话里的 id)决定'我是谁、取谁的数据'。用合法的弱账号通过认证,再把那个字段改成目标 id。",
+    "方法/参数变体:同资源换 GET/POST/PUT、加或去掉 id 参数、批量端点(/api/items?ids=)、导出/打印端点常漏授权。",
+    "目标数据可能'伪装':敏感值/flag 可能存在某条记录的普通字段(如姓名/备注/资料字段),要对命中的 id 渲染完整详情页再匹配,别只在列表页做正则。"
+  ],
+  "key_payloads": [
+    "for i in $(seq <起> <止>); do echo -n \"$i \"; curl -s -b jar \"http://<T>/resource/$i\" | grep -oE '<目标特征>'; done",
+    "curl -s -b jar -X POST http://<T>/<action> --data 'user_id=<目标id>'   # 认证-授权解耦:合法登录后把身份字段改成目标",
+    "curl -s -H 'X-User-Id: <目标>' -b jar http://<T>/<resource>   # header 型;JWT 型改 payload 的 sub/uid/role(见 web-jwt-attack-family)"
+  ],
+  "category": "web",
+  "cve": [],
+  "tags": [
+    "web",
+    "idor",
+    "authorization",
+    "access-control"
+  ],
+  "source": "seed: web security technique methodology",
+  "created_ts": 0.0,
+  "preconditions": [
+    "存在按用户可控标识取对象的功能,且缺少'该对象属于当前主体'的授权校验"
+  ],
+  "verify_oracle": "用一个身份/会话取回明显属于另一主体的数据(他人订单/资料/记录),或目标记录字段里出现敏感值/flag",
+  "pitfalls": [
+    "只 fuzz URL/query 的 id,漏了隐藏表单字段/cookie/JWT/header 里的对象引用——越权点常在这些不显眼处",
+    "目标 id 非顺序、非 ±1:按观察到的 id 量级扫邻域",
+    "先过认证用的常不是 admin(可能是 test/guest/某个普通人名),再打解耦的身份字段",
+    "敏感值可能藏在某记录的普通字段(名字/备注)里,要渲染完整详情再匹配",
+    "登录成功 ≠ 拿到目标:登进去多是低权或自己的数据,真正的分在'把身份指向别人'那一步"
+  ]
+}

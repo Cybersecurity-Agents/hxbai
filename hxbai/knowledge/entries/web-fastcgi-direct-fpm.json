@@ -1,0 +1,41 @@
+{
+  "id": "web-fastcgi-direct-fpm",
+  "title": "nginx+PHP-FPM 场景的 FastCGI 直连 RCE:跳过 nginx 层直接对 FPM 说 FastCGI 协议",
+  "vuln_pattern": "PHP 站点由 nginx FastCGI 代理到 php-fpm,而 nginx 层的重写/鉴权/路径限制把 HTTP 入口全堵死(或只留 false-open 的假路径)。此时绕过 nginx、直接对 FPM 端口讲 FastCGI 协议:自己拼 FastCGI 记录,SCRIPT_FILENAME 指向任意 PHP 文件(配合已知 LFI/可写文件),PHP_VALUE 注入 auto_prepend_file=php://input 一条龙 RCE",
+  "fingerprint": [
+    "fastcgi",
+    "php-fpm",
+    "fpm 直连",
+    "FCGI_STDIN",
+    "fastcgi 协议",
+    "SCRIPT_FILENAME",
+    "PHP_VALUE auto_prepend_file",
+    "fcgi client",
+    "9000 端口直连",
+    "cgi-fcgi"
+  ],
+  "anti_fingerprint": [
+    "xss",
+    "跨站",
+    "ssti",
+    "模板"
+  ],
+  "category": "web",
+  "source": "seed",
+  "exploit_steps": [
+    "定 FPM 端口:php-fpm 默认 :9000(容器内常 9000/9001);从 SSRF/主机枚举/配置泄露(compose、www.conf listen=)确认。FPM 只听内网/本机——需要站内跳板(SSRF 参数、RCE 半步、或同网段可达)。",
+    "false-open 探测:向疑似 FPM 端口发一个原始 FastCGi 记录头(0x01 0x01 ... )或残缺请求——FPM 对非协议输入常保持连接/回 FCGI_END_REQUEST 或静默,nginx 则回 400 HTML。区分'后面是 FPM 还是 web 服务'。",
+    "手拼 FastCGI 请求(python struct 或现成 fcgi 脚本):FCGI_BEGIN_REQUEST(RESPONDER) + FCGI_PARAMS(SCRIPT_FILENAME=/var/www/html/已知php文件、SCRIPT_NAME/QUERY_STRING、**PHP_VALUE=auto_prepend_file=php://input** + 允许 url_include 的开关) + FCGI_STDIN(放 payload)。PHP_VALUE 多值用 \\n 分隔。",
+    "payload 落点:auto_prepend_file=php://input 让 stdin 里的任意 PHP 先执行——请求体即命令;或 SCRIPT_FILENAME 直接指向攻击者可写路径的文件(配合任意文件写原语落的 webshell,后缀无所谓,FPM 不管 nginx 的 .php 路由规则)。",
+    "如果只剩 LFI 没有 RCE:SCRIPT_FILENAME 指向 /proc/self/fd/N 或已知日志/会话文件,FPM 会执行其中 PHP 段——LFI->RCE 的 FastCGI 版。"
+  ],
+  "key_payloads": [
+    "# 最小 FCGI 请求骨架(python struct 拼 BEGIN_REQUEST+PARAMS+STDIN)\nimport struct\n def rec(t, rid, body): return struct.pack('>BBHHB', 1, t, rid, len(body), 0) + body + b'\\x00' * (-len(body) % 8)",
+    "PHP_VALUE \"auto_prepend_file=php://input\\nauto_append_file=php://input\""
+  ],
+  "refs": [
+    "PayloadsAllTheThings FastCGI Attack",
+    "/opt/kb PoC fastcgi 类脚本"
+  ],
+  "notes": "nginx 全堵死≠题死——FPM 层是第二个独立入口;先定端口再谈利用。"
+}

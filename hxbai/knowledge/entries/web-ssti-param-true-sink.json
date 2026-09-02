@@ -1,0 +1,32 @@
+{
+  "id": "web-ssti-param-true-sink",
+  "title": "SSTI 探针打在出问题的参数本身:别被功能名/渲染标签框死,逐参数注入",
+  "vuln_pattern": "模板注入的 sink 在某个【具体参数】上(用户名、搜索词、文件名、报错回显字段),但功能描述/页面标签叫'格式化/格式/template/format string'之类,把注意力引向错误的参数或'只是格式化不是模板'的误判。真判据只有一个:把 {{7*7}}/${7*7}/<%=7*7%>/#set 类探针逐个参数实际打进去看回显",
+  "fingerprint": [
+    "ssti sink parameter",
+    "参数级模板注入",
+    "jinja2 用户输入渲染",
+    "django template inject",
+    "format string vs ssti",
+    "逐参数探针",
+    "template injection probe",
+    "render user input",
+    "用户输入进模板"
+  ],
+  "anti_fingerprint": ["xss", "跨站", "captcha", "验证码", "padding", "oracle"],
+  "category": "web",
+  "source": "seed",
+  "exploit_steps": [
+    "穷举参数而不是选参数:该功能的【每一个】输入字段(可见表单 + 隐藏字段 + API body 字段 + URL 参数 + header 里的自定义字段)各打一发引擎探针套装 {{7*7}}、${7*7}、<%= 7*7 %>、#{7*7}、{7*7}、{{7*'7'}}——回显 49/7777777 即坐实,回显原样=该参数不是 sink,换下一个,不恋战也不提前断死。",
+    "别信功能名:'format/formatting/格式化'标签的参数可能根本不走模板,而叫 name/title/query 的字段反而被 engine.from_string 拼进模板——功能语义与 sink 位置无关,只有探针说了算。",
+    "多步流程的 sink 在'回显你输入'的那一步:注册/搜索/导出类功能常把输入存起来在【下一步】页面渲染——探针要跟到第二步的响应里找 49,不是只看提交响应。",
+    "坐实后按引擎速查提权(Jinja2/Django/velocity/Twig 分链),先 `{{7*7}}` 定引擎再上 os 链;回显被 HTML 转义不等于没执行——用 {{7*7}} 的数字特征判定,不用标签特征。",
+    "浅尝纪律:参数集合没打完(可见+隐藏+API+header)之前不断言'无 SSTI'。"
+  ],
+  "key_payloads": [
+    "for p in name title query search q file path msg comment; do curl -s \"http://$T/search?$p={{7*7}}\" | grep -o '49\\|{{7*7}}' | head -1 | xargs echo \"$p ->\"; done",
+    "{{ ''.__class__.__mro__[1].__subclasses__() }}   # 引擎坐实后的链起点(Jinja2/Tornado 通用)"
+  ],
+  "refs": ["/opt/kb PayloadsAllTheThings Server Side Template Injection"],
+  "notes": "探针响应可能延迟到下一步页面/邮件/导出文件——sink 在渲染处,不在提交处。"
+}

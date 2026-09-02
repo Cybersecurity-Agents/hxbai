@@ -1,0 +1,67 @@
+{
+  "id": "web-toctou-race-condition",
+  "title": "TOCTOU / 竞态条件 — 在检查与使用之间抢占可变共享状态",
+  "vuln_pattern": "授权/额度/唯一性/状态机在'检查'与'使用'之间存在时间窗,期间可并发改写被检查的共享状态(会话行/余额/库存/文件/DB 记录),使检查通过而使用时状态已被换掉",
+  "fingerprint": [
+    "秒杀",
+    "优惠券",
+    "限领",
+    "限购",
+    "抢购",
+    "余额",
+    "库存",
+    "积分",
+    "兑换",
+    "下单",
+    "并发请求",
+    "限时活动",
+    "race condition",
+    "toctou",
+    "竞态",
+    "并发",
+    "concurrency",
+    "double spend",
+    "超卖",
+    "atomic",
+    "事务",
+    "isolation level",
+    "read uncommitted",
+    "时间窗",
+    "抢占",
+    "check then use"
+  ],
+  "exploit_steps": [
+    "找 check->use 不原子的对:同一可变状态被读两次(先校验后取用)、'查存在->再创建/扣减'、'校验权限->再执行'。共享状态包括服务端会话行、余额、库存、优惠券、文件、DB 记录。",
+    "放大时间窗:两步之间若夹着慢操作(PBKDF2/bcrypt 高迭代、外部请求、大计算)窗口达几十毫秒,极易命中;低隔离级(READ UNCOMMITTED)让并发未提交写也可见。",
+    "竞态是'跨请求对同一状态',不是同端点自复制:常见 A 请求改写状态、B 请求读该状态,二者必须作用于同一条记录——同一 session cookie / 同一对象 id / 同一账户;每线程各自 cookie/资源则永远撞不上。",
+    "前置状态:先把状态置到'检查能过'的合法态(如建一个有效弱账号会话),否则每次卡在检查、到不了 use。",
+    "并发打法:一个 write-loop 持续改写状态 + 一个 read-loop 持续触发 check->use,数十~数百并发,扫响应里的成功态/目标。'错的值也行'是反直觉点——use 端可能只看某布尔/状态位,不再复核你并发写入用的凭据。"
+  ],
+  "key_payloads": [
+    "python3: s=requests.Session()  # 全程同一 cookie;线程池A狂发改写请求、线程池B狂发触发请求,扫B响应里的目标",
+    "单包竞态: threading.Barrier(N) 让 N 个请求同刻发出(唯一性/额度类);跨端点竞态用两个持续 loop 而非单发",
+    "/opt/tools/race.py --url http://<T>/<触发端点> --reqs a,b   # 同 cookie 并发触发"
+  ],
+  "category": "web",
+  "cve": [],
+  "tags": [
+    "web",
+    "race-condition",
+    "toctou",
+    "concurrency",
+    "access-control"
+  ],
+  "source": "seed: web security technique methodology",
+  "created_ts": 0.0,
+  "preconditions": [
+    "某检查与其对应使用之间存在时间窗,且被检查的状态是可被并发请求改写的共享状态"
+  ],
+  "verify_oracle": "并发下拿到单请求拿不到的结果(越权页/多扣一次额度/重复领取/管理态),响应里出现目标标志",
+  "pitfalls": [
+    "每线程独立 cookie/session = 打到不同状态行,永远不竞态;必须共享同一 session/对象 id",
+    "单发一对请求几乎撞不上:要持续 write-loop + read-loop,让某次改写正好落在某个在途 check->use 窗口内",
+    "先把状态置为'检查能过'的合法态,否则每次都卡在检查",
+    "use 端可能只查某状态位不复核凭据 -> 并发写入用'错的密码/错的值'也能得手,别因'没有正确凭据'就放弃",
+    "窗口小就找能放大它的慢操作(登录 KDF、外部调用);隔离级低更易命中"
+  ]
+}
